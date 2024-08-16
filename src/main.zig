@@ -14,13 +14,13 @@ const material = @import("material.zig");
 pub fn main() !void {
     const R = std.math.cos(std.math.pi / 4.0);
 
-    var camera: engine.Camera = undefined;
+    var camera: engine.Camera = engine.Camera{};
     camera.vfov = 90;
     camera.aspect_ratio = 16.0 / 9.0;
     camera.image_width = 400;
     camera.samples_per_pixel = 100;
     camera.max_depth = 50;
-    _ = &camera.initialize();
+    std.debug.print(camera.image_height, .{});
 
     // dont ask me why this is an arena
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

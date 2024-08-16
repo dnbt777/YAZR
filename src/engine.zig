@@ -59,11 +59,6 @@ pub const Camera = struct {
     pub var pixel00_loc = viewport_upper_left + utils.splat(0.5) * (pixel_delta_u + pixel_delta_v);
     pub var pixel_samples_scale = 1.0 / @as(f32, @floatFromInt(samples_per_pixel));
 
-    // delete in a sec
-    pub fn initialize(self: *Camera) void {
-        self.* = self.*;
-    }
-
     pub fn ray_color(ray: rt.Ray, depth: u32, world: hittable.Hittable) @Vector(3, f32) {
         if (depth <= 0) {
             return utils.splat(0);
