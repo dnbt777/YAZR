@@ -1,3 +1,9 @@
+game
+.zig-cache/
+test.ppm
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
