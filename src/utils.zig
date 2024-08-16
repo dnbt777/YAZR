@@ -5,6 +5,14 @@ pub fn dot(a: @Vector(3, f32), b: @Vector(3, f32)) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+pub fn cross(a: @Vector(3, f32), b: @Vector(3, f32)) @Vector(3, f32) {
+    return @as(@Vector(3, f32), .{
+        a[1] * b[2] - a[2] * b[1],
+        -(a[0] * b[2] - a[2] * b[0]),
+        a[0] * b[1] - a[1] * b[0],
+    });
+}
+
 pub fn splat(x: f32) @Vector(3, f32) {
     return @as(@Vector(3, f32), @splat(x));
 }
@@ -65,6 +73,15 @@ pub fn random_in_unit_sphere() @Vector(3, f32) {
 
 pub fn random_unit_vector() @Vector(3, f32) {
     return unit_vector(random_in_unit_sphere());
+}
+
+pub fn random_in_unit_disk() @Vector(3, f32) {
+    while (true) {
+        const p = vec3(random_double_range(-1, 1), random_double_range(-1, 1), 0);
+        if (dot(p, p) < 1) {
+            return p;
+        }
+    }
 }
 
 pub fn random_on_hemisphere(normal: @Vector(3, f32)) @Vector(3, f32) {
