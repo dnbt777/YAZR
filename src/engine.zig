@@ -37,27 +37,28 @@ pub const Camera = struct {
 
     vfov: f32,
 
-    pub const vfov = 90;
-    pub var aspect_ratio = 16.0 / 9.0;
-    pub var max_depth = 5;
-    pub var camera_center = .{ 0, 0, 0 };
-    pub var image_width = 400;
-    pub var focal_length = 1.0;
-    pub var samples_per_pixel = 50; // can be huge source of inefficiency... 1/samples render speed per frame
-
-    pub var image_height: u16 = @intFromFloat(@as(f32, @floatFromInt(image_width)) / aspect_ratio);
-    const theta = utils.degrees_to_radians(vfov);
-    const h = std.math.tan(theta / 2);
-    pub var viewport_height = 2.0 * h * focal_length;
-    pub var viewport_aspect_ratio = @as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height));
-    pub var viewport_width = viewport_height * viewport_aspect_ratio;
-    pub var viewport_u = .{ viewport_width, 0, 0 };
-    pub var viewport_v = .{ 0, -viewport_height, 0 };
-    pub var pixel_delta_u = viewport_u / utils.splat(@as(f32, @floatFromInt(image_width)));
-    pub var pixel_delta_v = viewport_v / utils.splat(@as(f32, @floatFromInt(image_height)));
-    pub var viewport_upper_left = camera_center - @Vector(3, f32){ 0, 0, focal_length } - viewport_u / utils.splat(2.0) - viewport_v / utils.splat(2.0);
-    pub var pixel00_loc = viewport_upper_left + utils.splat(0.5) * (pixel_delta_u + pixel_delta_v);
-    pub var pixel_samples_scale = 1.0 / @as(f32, @floatFromInt(samples_per_pixel));
+    pub fn init(self: *Camera) void {
+        self.vfov = 90;
+        self.aspect_ratio = 16.0 / 9.0;
+        self.max_depth = 5;
+        self.camera_center = .{ 0, 0, 0 };
+        self.image_width = 400;
+        self.focal_length = 1.0;
+        self.samples_per_pixel = 50; // can be huge source of inefficiency... 1/samples render speed per frame
+        self.image_height = @intFromFloat(@as(f32, @floatFromInt(self.image_width)) / self.aspect_ratio);
+        const theta = utils.degrees_to_radians(self.vfov);
+        const h = std.math.tan(theta / 2);
+        self.viewport_height = 2.0 * h * self.focal_length;
+        self.viewport_aspect_ratio = @as(f32, @floatFromInt(self.image_width)) / @as(f32, @floatFromInt(self.image_height));
+        self.viewport_width = self.viewport_height * self.viewport_aspect_ratio;
+        self.viewport_u = .{ self.viewport_width, 0, 0 };
+        self.viewport_v = .{ 0, -self.viewport_height, 0 };
+        self.pixel_delta_u = self.viewport_u / utils.splat(@as(f32, @floatFromInt(self.image_width)));
+        self.pixel_delta_v = self.viewport_v / utils.splat(@as(f32, @floatFromInt(self.image_height)));
+        self.viewport_upper_left = self.camera_center - @Vector(3, f32){ 0, 0, self.focal_length } - self.viewport_u / utils.splat(2.0) - self.viewport_v / utils.splat(2.0);
+        self.pixel00_loc = self.viewport_upper_left + utils.splat(0.5) * (self.pixel_delta_u + self.pixel_delta_v);
+        self.pixel_samples_scale = 1.0 / @as(f32, @floatFromInt(self.samples_per_pixel));
+    }
 
     pub fn ray_color(ray: rt.Ray, depth: u32, world: hittable.Hittable) @Vector(3, f32) {
         if (depth <= 0) {
