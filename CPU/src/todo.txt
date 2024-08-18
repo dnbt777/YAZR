@@ -1,0 +1,8 @@
+get render to shoot out rays in batches on cpu
+render_batch or something idk
+
+
+get render to shoot out rays in batches on gpu
+
+
+change from rendering ppm to rendering to a display of some sort...

@@ -118,3 +118,30 @@ pub fn random_double() f32 {
 pub fn random_double_range(min: f32, max: f32) f32 {
     return min + (max - min) * random_double();
 }
+
+fn createRandomMatrix(N: usize, allocator: *std.mem.Allocator) ![]f32 {
+    // Create a vector to hold the matrix elements
+    const matrix = try allocator.alloc(f32, N * N);
+
+    // Seed the random number generator
+    var rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.milliTimestamp())));
+
+    // Fill the matrix with random f32 values
+    for (matrix) |*value| {
+        value.* = (@mod(@as(f32, @floatFromInt(rng.next())), 100.0) / 100.0) * 2.0 - 1.0; // Random value between -1.0 and 1.0
+    }
+
+    return matrix;
+}
+
+fn createConstMatrix(N: usize, allocator: *std.mem.Allocator, c: f32) ![]f32 {
+    // Create a vector to hold the matrix elements
+    const matrix = try allocator.alloc(f32, N * N);
+
+    // Fill the matrix with random f32 values
+    for (matrix) |*value| {
+        value.* = c;
+    }
+
+    return matrix;
+}
