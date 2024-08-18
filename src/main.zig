@@ -33,53 +33,64 @@ pub fn main() !void {
         .radius = 1000,
     } });
 
-    for (0..22) |ai| {
+    const sphere_count_sqrt: usize = 22;
+    const sphere_count: usize = sphere_count_sqrt * sphere_count_sqrt;
+    var sphere_materials: [sphere_count]material.Material = undefined;
+
+    for (0..sphere_count_sqrt) |ai| {
         const a: i8 = @as(i8, @intCast(ai)) - 11;
-        for (0..22) |bi| {
+        for (0..sphere_count_sqrt) |bi| {
             const b: i8 = @as(i8, @intCast(bi)) - 11;
-            const choose_mat = utils.random_double();
+            const sphere_index = ai * sphere_count_sqrt + bi;
+            const choose_mat: f32 = utils.random_double();
+            std.debug.print("{} => ", .{choose_mat});
             const center: @Vector(3, f32) = utils.vec3(@as(f32, @floatFromInt(a)) + 0.9 * utils.random_double(), 0.2, @as(f32, @floatFromInt(b)) + 0.9 * utils.random_double());
 
             const vx = center - utils.vec3(4, 0.2, 0);
             if (@sqrt(utils.dot(vx, vx)) > 0.9) {
-                var sphere_material: material.Material = undefined;
-
                 if (choose_mat < 0.8) {
                     // diffuse
-                    sphere_material = material.Material{
+                    std.debug.print("diffuse\n", .{});
+                    const albedo = utils.random_vec3() * utils.random_vec3();
+                    std.debug.print("albedo={}\n", .{albedo});
+                    sphere_materials[sphere_index] = material.Material{
                         .mat_id = 1,
-                        .albedo = utils.random_vec3() * utils.random_vec3(),
+                        .albedo = albedo,
                         .fuzz = undefined,
                         .refraction_index = undefined,
                     };
                     try world_list.add(hittable.Hittable{ .sphere = hittable.Sphere{
-                        .mat = &sphere_material,
+                        .mat = &sphere_materials[sphere_index],
                         .center = center,
                         .radius = 0.2,
                     } });
                 } else if (choose_mat < 0.95) {
                     // metal
-                    sphere_material = material.Material{
+                    std.debug.print("metal\n", .{});
+                    const albedo = utils.random_vec3_range(0.5, 1);
+                    std.debug.print("albedo={}\n", .{albedo});
+                    sphere_materials[sphere_index] = material.Material{
                         .mat_id = 2,
-                        .albedo = utils.random_vec3_range(0.5, 1),
-                        .fuzz = utils.random_double_range(0, 0.5),
+                        .albedo = albedo,
+                        .fuzz = utils.random_double_range(0, 0.01),
                         .refraction_index = undefined,
                     };
                     try world_list.add(hittable.Hittable{ .sphere = hittable.Sphere{
-                        .mat = &sphere_material,
+                        .mat = &sphere_materials[sphere_index],
                         .center = center,
                         .radius = 0.2,
                     } });
                 } else {
                     // glass
-                    sphere_material = material.Material{
+                    std.debug.print("glass\n", .{});
+                    sphere_materials[sphere_index] = material.Material{
                         .mat_id = 3,
                         .albedo = undefined,
                         .fuzz = undefined,
                         .refraction_index = 1.5,
                     };
                     try world_list.add(hittable.Hittable{ .sphere = hittable.Sphere{
-                        .mat = &sphere_material,
+                        .mat = &sphere_materials[sphere_index],
                         .center = center,
                         .radius = 0.2,
                     } });

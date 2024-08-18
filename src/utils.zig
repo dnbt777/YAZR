@@ -105,11 +105,14 @@ pub fn degrees_to_radians(degrees: f32) f32 {
 }
 
 pub fn random_double() f32 {
-    //millis is not precise enough...
-    const timestamp: u64 = @as(u64, @intCast(std.time.nanoTimestamp()));
-    var prng = std.Random.DefaultPrng.init(timestamp);
-    const rand = prng.random();
-    return rand.float(f32);
+    const comparator: u64 = @as(u64, @intCast(std.time.nanoTimestamp())); // 101010... if compiled in debug mode, junk/random data if in Release modes
+    var seed: u64 = @as(u64, @intCast(std.time.nanoTimestamp()));
+    while (seed == comparator) {
+        seed = @as(u64, @intCast(std.time.nanoTimestamp()));
+    } // make sure it makes different numbers
+    // this is inefficient af im sure
+    var rng = std.Random.DefaultPrng.init(seed); // in the future I cna easily add time back in
+    return rng.random().float(f32); //there may be a better way but.. .this works
 }
 
 pub fn random_double_range(min: f32, max: f32) f32 {

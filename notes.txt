@@ -1,0 +1,28 @@
+zig has no runtime
+so there is no 'x == undefined'
+'const x = undefined' gives x random data
+if compiled in debug mode, this is 101010101010...
+if compiled in release modes, this is junk/random garbage data
+this is why my rng wasnt working. my seed was undefined. however this set it to the same value each time, a u64 of 1010101010....
+https://zig.guide/build-system/build-modes/
+to change this, do
+'const mode = b.ReleaseMode.safe;' // modes: off, any, fast, safe, small
+
+
+
+the zig source is actually super super useful to go through, since the docs (or online forums) can be outdated or lacking. the docs are usually much more up to date but may be missing information. the source code has it all there. I used this to solve several problems I had.
+https://github.com/ziglang/zig/blob/master/lib/std/Build/
+
+for example, I want to figure out how to change the build mode for exe in build.zig
+so I figure out what type exe is. it's returned from b.addExecutable, and B is *std.Build, so I can go to std/Build or std/Build.zig in the source code and search for 'addExecutable'
+sure enough, addExecutable returns a Step.Compile. Now we need to find Step.
+I ctrl+f and look for the first instance of "Step".
+'pub const Step = @import("Build/Step.zig");'
+So, Step is imported from Build/Step.zig
+So I go there in github
+Step.Compile is imported from Step/Compile.zig, so I go there next
+This is exe's namespace (idk what to call it). So I search for any functions that have 'mode' in the name, so I can find something that lets me change the compiler's 
+
+
+Another great resource for zig stuff - just go here and ctrl+f to search
+https://ziglang.org/documentation/master/#enum
