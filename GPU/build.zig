@@ -35,6 +35,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.addLibraryPath(std.Build.LazyPath{ .src_path = .{
+        .owner = b,
+        .sub_path = "cudalibs",
+    } });
+    exe.linkSystemLibrary("utils"); // utils.cu, or, libutils.so
+    // exe.linkSystemLibrary(library name here);
+    exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
