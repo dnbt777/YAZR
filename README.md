@@ -31,7 +31,11 @@ If you want to understand how to use certain functions or types or any of that, 
 
 
 ### GPU stuff
+#### Intro video to GPU stuff
+https://www.youtube.com/watch?v=pPStdjuYzSI
 
+
+#### Zig/cuda example repo
 Here's an example of how to use zig as a wrapper for CUDA, so you can use GPU-acceleration in zig:
 https://github.com/dnbt777/zig-cuda-utils/
 

@@ -9,6 +9,7 @@ const display = @import("display.zig");
 // we dont pass in the whole R channel, just a pointer to its first value
 extern "c" fn fillMat(M: *const f32, width: u16, height: u16, c: f32) void;
 extern "c" fn colorImg(R: *const f32, G: *const f32, B: *const f32, width: u16, height: u16) void;
+extern "c" fn initImage(R: *const f32, G: *const f32, B: *const f32, width: u16, height: u16) void;
 extern "c" fn shootRays(
     R: *const f32,
     G: *const f32,
@@ -27,6 +28,7 @@ extern "c" fn shootRays(
     origin0: f32, // not sure if this should be a slice...
     origin1: f32, // not sure if this should be a slice...
     origin2: f32, // not sure if this should be a slice...
+    samples: u16,
 ) void;
 
 //extern "c" fn shootRaysKernel(imageR, imageG, imageB, width, height, samples_per_pixel, depth, hittables_flattened, num_hittables)
@@ -74,6 +76,7 @@ pub fn main() !void {
         try allocator.alloc(f32, image_height * image_width),
         try allocator.alloc(f32, image_height * image_width),
     };
+    initImage(&image[0][0], &image[1][0], &image[2][0], image_width, image_height);
     std.debug.print("Allocation time: {}ms\n", .{time() - start});
 
     // if this works it will output a slightly red/grey image
@@ -98,25 +101,29 @@ pub fn main() !void {
     // shoot rays and send to images
     const start2 = time();
     const origin = camera_center; // just do this for now
-    shootRays(
-        &image[0][0],
-        &image[1][0],
-        &image[2][0],
-        image_width,
-        image_height,
-        pixel_delta_u[0],
-        pixel_delta_u[1],
-        pixel_delta_u[2],
-        pixel_delta_v[0],
-        pixel_delta_v[1],
-        pixel_delta_v[2],
-        pixel00_loc[0],
-        pixel00_loc[1],
-        pixel00_loc[2],
-        origin[0],
-        origin[1],
-        origin[2],
-    );
+    const samples = 500;
+    for (0..60) |_| {
+        shootRays(
+            &image[0][0],
+            &image[1][0],
+            &image[2][0],
+            image_width,
+            image_height,
+            pixel_delta_u[0],
+            pixel_delta_u[1],
+            pixel_delta_u[2],
+            pixel_delta_v[0],
+            pixel_delta_v[1],
+            pixel_delta_v[2],
+            pixel00_loc[0],
+            pixel00_loc[1],
+            pixel00_loc[2],
+            origin[0],
+            origin[1],
+            origin[2],
+            samples,
+        );
+    }
     std.debug.print("Ray shooting time: {}ms\n", .{time() - start2});
 
     // Writes to ppm. alternate in future: write to some screen buffer or something

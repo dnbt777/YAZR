@@ -1,7 +1,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 
-
 __global__ void fillMatKernel(float *M, int width, int height, float c) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -32,12 +31,15 @@ __device__ void unitvector(float var[3]) {
     }
 }
 
+__managed__ float d_R[1000 * 1000], d_G[1000*1000], d_B[1000*1000];
+
 __global__ void shootRaysKernel(
-        float *R, float *G, float *B, int width, int height,
+        int width, int height,
         const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
         const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
         const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
-        const float origin0, const float origin1, const float origin2
+        const float origin0, const float origin1, const float origin2,
+        int samples
         ) {
         // int samples_per_pixel, int depth,
         // int hittables_flattened, int num_hittables) { //idk what to do about hittable type
@@ -55,100 +57,94 @@ __global__ void shootRaysKernel(
     // space has to fit each thread or whatever
     // int sqrt_samples_per_pixel = ceil(sqrt(samples_per_pixel)); // may cause issues affecting memory in outside executed threads...
     // one step at a time. first we just trace a single ray per pixel
-    if (row < height && col < width) {
-        // // // // // // // ray color func here // // // // // // //
-        // pixel's center in the viewport
-        // uh, I think...
-        pixel_center[0] = pixel00_loc0 + (row * pixel_delta_u0) + (col * pixel_delta_v0),
-        pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1),
-        pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2),
+    for (int i=0;i<samples;i++) {
+        if (row < height && col < width) {
+            // // // // // // // ray color func here // // // // // // //
+            // pixel's center in the viewport
+            // uh, I think...
+            pixel_center[0] = pixel00_loc0 + (row * pixel_delta_u0) + (col * pixel_delta_v0),
+            pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1),
+            pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2),
 
-        direction[0] = pixel_center[0] - origin0;
-        direction[1] = pixel_center[1] - origin1;
-        direction[2] = pixel_center[2] - origin2;
+            direction[0] = pixel_center[0] - origin0;
+            direction[1] = pixel_center[1] - origin1;
+            direction[2] = pixel_center[2] - origin2;
 
-        
+            
 
-        // ray_color func (we have origin and direction, which == ray)
+            // ray_color func (we have origin and direction, which == ray)
 
-        //for sphere in...
-        // hit sphere
-        float hit_sphere;
-        float sphere_center[3];
-        sphere_center[0] = 0.0;
-        sphere_center[1] = 0.0;
-        sphere_center[2] = -1.0;
-        float sphere_radius = 0.5;
-        float oc[3];
-        oc[0] = sphere_center[0] - origin0;
-        oc[1] = sphere_center[1] - origin1;
-        oc[2] = sphere_center[2] - origin2;
-        float a = direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]; //dot
-        float b = -2.0 * (
-                direction[0]*oc[0] +
-                direction[1]*oc[1] +
-                direction[2]*oc[2]
-                );
-        float c = (
-                oc[0]*oc[0] +
-                oc[1]*oc[1] +
-                oc[2]*oc[2] - sphere_radius*sphere_radius
-                );
-        float discriminant = b*b - 4*a*c;
-        if (discriminant < 0) {
-            hit_sphere = -1.0;
-        } else {
-            hit_sphere = (-b - sqrt(discriminant)) / (2.0*a);
+            //for sphere in...
+            // hit sphere
+            float hit_sphere;
+            float sphere_center[3];
+            sphere_center[0] = 0.0;
+            sphere_center[1] = 0.0;
+            sphere_center[2] = -1.0;
+            float sphere_radius = 0.5;
+            float oc[3];
+            oc[0] = sphere_center[0] - origin0;
+            oc[1] = sphere_center[1] - origin1;
+            oc[2] = sphere_center[2] - origin2;
+            float a = direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]; //dot
+            float b = -2.0 * (
+                    direction[0]*oc[0] +
+                    direction[1]*oc[1] +
+                    direction[2]*oc[2]
+                    );
+            float c = (
+                    oc[0]*oc[0] +
+                    oc[1]*oc[1] +
+                    oc[2]*oc[2] - sphere_radius*sphere_radius
+                    );
+            float discriminant = b*b - 4*a*c;
+            if (discriminant < 0) {
+                hit_sphere = -1.0;
+            } else {
+                hit_sphere = (-b - sqrt(discriminant)) / (2.0*a);
+            }
+            
+            float t = hit_sphere;
+
+            if (t > 0.0) {
+                float N[3];
+                N[0] = (origin0 + t*direction[0]) - 0.0;
+                N[1] = (origin1 + t*direction[1]) - 0.0;
+                N[2] = (origin2 + t*direction[2]) - -1.0;
+                unitvector(N); // turns N into its unit vector
+
+                color[0] = 0.5*(N[0] + 1.0);
+                color[1] = 0.5*(N[1] + 1.0);
+                color[2] = 0.5*(N[2] + 1.0);
+            } else {
+                // ray_color
+                // unit_direction
+                magnitude = sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
+                unit_direction[0] = direction[0]/magnitude;
+                unit_direction[1] = direction[1]/magnitude;
+                unit_direction[2] = direction[2]/magnitude;
+
+                float a = 0.5*(unit_direction[1] + 1.0);
+
+                color[0] = (1.0-a) * 1.0 + a * 0.5;
+                color[1] = (1.0-a) * 1.0 + a * 0.7;
+                color[2] = (1.0-a) * 1.0 + a * 1.0;
+            }
+
+            // // // // // // // write_color // // // // // // //
+            d_R[row*width + col] = color[0]*255.0;
+            d_G[row*width + col] = color[1]*255.0;
+            d_B[row*width + col] = color[2]*255.0;
+
         }
-        
-        float t = hit_sphere;
-
-        if (t > 0.0) {
-            float N[3];
-            N[0] = (origin0 + t*direction[0]) - 0.0;
-            N[1] = (origin1 + t*direction[1]) - 0.0;
-            N[2] = (origin2 + t*direction[2]) - -1.0;
-            unitvector(N); // turns N into its unit vector
-
-            color[0] = 0.5*(N[0] + 1.0);
-            color[1] = 0.5*(N[1] + 1.0);
-            color[2] = 0.5*(N[2] + 1.0);
-        } else {
-            // ray_color
-            // unit_direction
-            magnitude = sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
-            unit_direction[0] = direction[0]/magnitude;
-            unit_direction[1] = direction[1]/magnitude;
-            unit_direction[2] = direction[2]/magnitude;
-
-            float a = 0.5*(unit_direction[1] + 1.0);
-
-            color[0] = (1.0-a) * 1.0 + a * 0.5;
-            color[1] = (1.0-a) * 1.0 + a * 0.7;
-            color[2] = (1.0-a) * 1.0 + a * 1.0;
-        }
-
-        // // // // // // // write_color // // // // // // //
-        R[row*width + col] = color[0]*255.0;
-        G[row*width + col] = color[1]*255.0;
-        B[row*width + col] = color[2]*255.0;
-
     }
 }
 
-// instead of doing more samples I can just keep calling this over and over again!
-// I just have to initialize R G B to zeroes
-// then on each pass, I just add the color
-// then at the end average them out..?
-// has flaws at high sampling but whatever
-extern "C" void shootRays(
-        float *R, float *G, float *B, int width, int height,
-        const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
-        const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
-        const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
-        const float origin0, const float origin1, const float origin2
-        ) {
-    float *d_R, *d_G, *d_B;
+
+
+
+extern "C" void initImage(float *R, float *G, float *B, int width, int height) {
+    // float *d_R, *d_G, *d_B;
     size_t size = width * height * sizeof(float);
 
     // Allocate device memory and check for errors
@@ -175,15 +171,31 @@ extern "C" void shootRays(
         cudaFree(d_B);
         return;
     }
+}
 
 
+// instead of doing more samples I can just keep calling this over and over again!
+// I just have to initialize R G B to zeroes
+// then on each pass, I just add the color
+// then at the end average them out..?
+// has flaws at high sampling but whatever
+extern "C" void shootRays(
+        float *R, float *G, float *B, int width, int height,
+        const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
+        const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
+        const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
+        const float origin0, const float origin1, const float origin2,
+        int samples
+        ) {
     // Define block and grid sizes
     dim3 threadsPerBlock(16, 16);
     dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    cudaError_t errR, errG, errB, err;
+    size_t size = width * height * sizeof(float);
 
     // Launch the kernel
     shootRaysKernel<<<numBlocks, threadsPerBlock>>>(
-            d_R, d_G, d_B, width, height,
+            width, height,
             pixel_delta_u0,
             pixel_delta_u1,
             pixel_delta_u2,
@@ -195,7 +207,8 @@ extern "C" void shootRays(
             pixel00_loc2,
             origin0,
             origin1,
-            origin2
+            origin2,
+            samples
             );
     
     // Check for kernel launch errors
@@ -205,35 +218,18 @@ extern "C" void shootRays(
     }
 
     // Copy result from device to host
-    errR = cudaMemcpy(R, d_R, size, cudaMemcpyDeviceToHost);
-    errG = cudaMemcpy(G, d_G, size, cudaMemcpyDeviceToHost);
-    errB = cudaMemcpy(B, d_B, size, cudaMemcpyDeviceToHost);
+    // errR = cudaMemcpy(R, d_R, size, cudaMemcpyDeviceToHost);
+    // errG = cudaMemcpy(G, d_G, size, cudaMemcpyDeviceToHost);
+    // errB = cudaMemcpy(B, d_B, size, cudaMemcpyDeviceToHost);
     if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
         fprintf(stderr, "Error copying C to host: %s\n", cudaGetErrorString(errR));
     }
 
     // Free device memory
-    cudaFree(d_R);
-    cudaFree(d_G);
-    cudaFree(d_B);
+    //cudaFree(d_R);
+    //cudaFree(d_G);
+    //cudaFree(d_B);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
