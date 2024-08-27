@@ -1,17 +1,21 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include <GL/glew.h>
+#include <GL/gl.h>
+#include <GL/glu.h>
+#include <GL/glut.h>
+#include <GLFW/glfw3.h>
+#include <iostream>
+#include <cmath>
+#include <cuda_gl_interop.h>
 
-__global__ void fillMatKernel(float *M, int width, int height, float c) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // execute threads from (0, 0) to (height, width)
-    if (row < height && col < width) {
-        M[row * width + col] = c; // notice a pointer to a float is passed in, but we are indexing it
-        // this is intentional and is how we access other elements of the matrix
-    }
-}
-
+__managed__ int WIDTH;
+__managed__ int HEIGHT;
+__managed__ int CHANNELS;
+__managed__ GLuint textureID;
+__managed__ GLenum target;
+__managed__ cudaGraphicsResource* cudaResource;
+__managed__ unsigned char* d_image;
 
 __device__ float magnitude(float var[3]) {
     return sqrt(var[0]*var[0] + var[1]*var[1] + var[2]*var[2]);
@@ -31,10 +35,29 @@ __device__ void unitvector(float var[3]) {
     }
 }
 
-__managed__ float d_R[1000 * 1000], d_G[1000*1000], d_B[1000*1000];
+extern "C" int cuda_device_check() {
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);
 
-__global__ void shootRaysKernel(
-        int width, int height,
+    if (deviceCount == 0) {
+        printf("No CUDA-capable device found.\n");
+        return -1; // Exit if no device is found
+    }
+
+    // Print device properties
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0); // Get properties of the first device
+    printf("Using device: %s\n", deviceProp.name);
+
+    return 0;
+}
+// nah opengl now
+// __managed__ float d_R[1000 * 1000], d_G[1000*1000], d_B[1000*1000];
+
+
+// todo - make *tex managed
+__global__ void renderKernel(
+        unsigned char* screen_tex, int width, int height,
         const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
         const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
         const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
@@ -59,12 +82,13 @@ __global__ void shootRaysKernel(
     // one step at a time. first we just trace a single ray per pixel
     for (int i=0;i<samples;i++) {
         if (row < height && col < width) {
+            int idx = (row*width + col) * 3; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
             // // // // // // // ray color func here // // // // // // //
             // pixel's center in the viewport
             // uh, I think...
-            pixel_center[0] = pixel00_loc0 + (row * pixel_delta_u0) + (col * pixel_delta_v0),
-            pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1),
-            pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2),
+            pixel_center[0] = pixel00_loc0 + (row * pixel_delta_u0) + (col * pixel_delta_v0);
+            pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1);
+            pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2);
 
             direction[0] = pixel_center[0] - origin0;
             direction[1] = pixel_center[1] - origin1;
@@ -132,55 +156,23 @@ __global__ void shootRaysKernel(
             }
 
             // // // // // // // write_color // // // // // // //
-            d_R[row*width + col] = color[0]*255.0;
-            d_G[row*width + col] = color[1]*255.0;
-            d_B[row*width + col] = color[2]*255.0;
+            screen_tex[idx] = color[0];
+            screen_tex[idx + 1] = color[1];
+            screen_tex[idx + 2] = color[2];
 
         }
     }
 }
 
-
-
-
-extern "C" void initImage(float *R, float *G, float *B, int width, int height) {
-    // float *d_R, *d_G, *d_B;
-    size_t size = width * height * sizeof(float);
-
-    // Allocate device memory and check for errors
-    cudaError_t errR, errG, errB, err;
-    errR = cudaMalloc((void**)&d_R, size);
-    errG = cudaMalloc((void**)&d_G, size);
-    errB = cudaMalloc((void**)&d_B, size);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for img: %s\n", cudaGetErrorString(errR));
-        cudaFree(d_R);
-        cudaFree(d_G);
-        cudaFree(d_B);
-        return;
-    }
-
-    // Copy matrices from host to device
-    errR = cudaMemcpy(d_R, R, size, cudaMemcpyHostToDevice);
-    errG = cudaMemcpy(d_G, G, size, cudaMemcpyHostToDevice);
-    errB = cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error copying matrix to device: %s\n", cudaGetErrorString(errR));
-        cudaFree(d_R);
-        cudaFree(d_G);
-        cudaFree(d_B);
-        return;
-    }
-}
-
+__managed__ unsigned char tex;
 
 // instead of doing more samples I can just keep calling this over and over again!
 // I just have to initialize R G B to zeroes
 // then on each pass, I just add the color
 // then at the end average them out..?
 // has flaws at high sampling but whatever
-extern "C" void shootRays(
-        float *R, float *G, float *B, int width, int height,
+extern "C" void render(
+        int width, int height,
         const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
         const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
         const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
@@ -190,11 +182,12 @@ extern "C" void shootRays(
     // Define block and grid sizes
     dim3 threadsPerBlock(16, 16);
     dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    cudaError_t errR, errG, errB, err;
-    size_t size = width * height * sizeof(float);
+    cudaError_t err;
+    // size_t size = width * height * sizeof(float);
 
     // Launch the kernel
-    shootRaysKernel<<<numBlocks, threadsPerBlock>>>(
+    renderKernel<<<numBlocks, threadsPerBlock>>>(
+            &tex,
             width, height,
             pixel_delta_u0,
             pixel_delta_u1,
@@ -217,245 +210,118 @@ extern "C" void shootRays(
         fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
     }
 
-    // Copy result from device to host
-    // errR = cudaMemcpy(R, d_R, size, cudaMemcpyDeviceToHost);
-    // errG = cudaMemcpy(G, d_G, size, cudaMemcpyDeviceToHost);
-    // errB = cudaMemcpy(B, d_B, size, cudaMemcpyDeviceToHost);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error copying C to host: %s\n", cudaGetErrorString(errR));
-    }
+}
 
-    // Free device memory
-    //cudaFree(d_R);
-    //cudaFree(d_G);
-    //cudaFree(d_B);
+ 
+void displayTexture() {
+    glClear(GL_COLOR_BUFFER_BIT);
+    printf("cleared\n");
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    printf("texture bound\n");
+    // draw a single quad covering the entire window
+    // this is where the texture will be rendered
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, -1.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, -1.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
+    glEnd(); // end drawing the quad
+    printf("quad drawn\n");
+    glutSwapBuffers();
+    printf("texture displayed\n");
 }
 
 
 
+void updateTexture() {
+    size_t num_bytes;
 
+    cudaGraphicsMapResources(1, &cudaResource, 0);
+    printf("resources mapped\n");
+    cudaGraphicsResourceGetMappedPointer((void**)&d_image, &num_bytes, cudaResource);
+    printf("got mapped pointer\n");
 
-
-
-__global__ void colorImgKernel(float *R, float *G, float *B, int width, int height) {
-
-    // R G and B channels are passed in as separate parameters (obviously ig)
-
-    // get row and col of thread. move to block, then move to thread in the block => get abs thread
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // row * width + col => each row increases index by width. each col increases that by 1
-    if (row < height && col < width) {
-        R[row * width + col] = 255.0 * float(row) / float(width - 1);
-        G[row * width + col] = 255.0 * float(col) / float(height - 1);
-        B[row * width + col] = 0.0;
-    }
+    glBindTexture(target, textureID);
+    printf("texture bound\n");
+    glTexSubImage2D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB32F, GL_UNSIGNED_BYTE, d_image);
+    printf("subimage2d written\n");
+    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+    printf("resources unmapped");
 }
 
 
 
-__global__ void matmulKernel(float *A, float *B, float *C, int N) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+// initialize the *tex, the window, etc given parameters.
+// 
+extern "C" int initScene(
+    int width, int height,
+    const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
+    const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
+    const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
+    const float origin0, const float origin1, const float origin2,
+    int samples) {
 
-    if (row < N && col < N) {
-        float value = 0.0f;
-        for (int k = 0; k < N; k++) {
-            value += A[row * N + k] * B[k * N + col];
-        }
-        C[row * N + col] = value;
-    }
-}
+    CHANNELS = 3;
+    WIDTH = width;
+    HEIGHT = height;
+    target = GL_TEXTURE_2D;
 
-extern "C" void matmul(float *A, float *B, float *C, int N) {
-    float *d_A, *d_B, *d_C;
-    size_t size = N * N * sizeof(float);
+    // Create a windowed mode window and its OpenGL context
+    int argc = 0; // workaround for not passing argc and argv in via main()
+    glutInit(&argc, NULL);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
+    glutInitWindowSize(width, height);
+    glutCreateWindow("CUDA OpenGL Interop");
+    printf("Window created\n");
 
-    // Allocate device memory and check for errors
-    cudaError_t err;
-    err = cudaMalloc((void**)&d_A, size);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for A: %s\n", cudaGetErrorString(err));
-        return;
-    }
+    // initialize glew
+    glewInit();
+    printf("glew initialized\n");
+
+    //initOpenGL
+    glEnable(target);
+    glGenTextures(1, &textureID);
+    glBindTexture(target, textureID);
     
-    err = cudaMalloc((void**)&d_B, size);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for B: %s\n", cudaGetErrorString(err));
-        cudaFree(d_A);
-        return;
-    }
+    glTexImage2D(target, 0, GL_RGB32F, WIDTH, HEIGHT, 0, GL_RGB32F, GL_UNSIGNED_BYTE, NULL);
     
-    err = cudaMalloc((void**)&d_C, size);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for C: %s\n", cudaGetErrorString(err));
-        cudaFree(d_A);
-        cudaFree(d_B);
-        return;
-    }
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    printf("OpenGL initiailized\n");
 
-    // Copy matrices from host to device
-    err = cudaMemcpy(d_A, A, size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error copying A to device: %s\n", cudaGetErrorString(err));
-        cudaFree(d_A);
-        cudaFree(d_B);
-        cudaFree(d_C);
-        return;
-    }
+    //initCUDA
+    cudaMalloc((void**)&d_image, width * height * CHANNELS * sizeof(unsigned char));
+    dim3 blockSize(16, 16);
+    dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
+    renderKernel<<<gridSize, blockSize>>>(
+        d_image,
+        width, height,
+        pixel_delta_u0,
+        pixel_delta_u1,
+        pixel_delta_u2,
+        pixel_delta_v0,
+        pixel_delta_v1,
+        pixel_delta_v2,
+        pixel00_loc0,
+        pixel00_loc1,
+        pixel00_loc2,
+        origin0,
+        origin1,
+        origin2,
+        samples
+    );
+    cudaDeviceSynchronize();
+    cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
+    printf("cuda initialized\n");
 
-    err = cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error copying B to device: %s\n", cudaGetErrorString(err));
-        cudaFree(d_A);
-        cudaFree(d_B);
-        cudaFree(d_C);
-        return;
-    }
+    // other stuff    
+    glutDisplayFunc(displayTexture);
+    printf("texture display func set\n");
+    glutIdleFunc(updateTexture);
+    printf("texture update func set\n");
+    glutMainLoop();
 
-    // Define block and grid sizes
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((N + threadsPerBlock.x - 1) / threadsPerBlock.x, (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    
-    // Launch the kernel
-    matmulKernel<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, N);
-    
-    // Check for kernel launch errors
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
-    }
-
-    // Copy result from device to host
-    err = cudaMemcpy(C, d_C, size, cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error copying C to host: %s\n", cudaGetErrorString(err));
-    }
-
-    // Free device memory
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-}
-
-extern "C" void colorImg(float *R, float *G, float *B, int width, int height) {
-    float *d_R, *d_G, *d_B;
-    size_t size = width * height * sizeof(float);
-
-    // Allocate device memory and check for errors
-    cudaError_t errR, errG, errB, err;
-    errR = cudaMalloc((void**)&d_R, size);
-    errG = cudaMalloc((void**)&d_G, size);
-    errB = cudaMalloc((void**)&d_B, size);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for img: %s\n", cudaGetErrorString(errR));
-        cudaFree(d_R);
-        cudaFree(d_G);
-        cudaFree(d_B);
-        return;
-    }
-
-    // Copy matrices from host to device
-    errR = cudaMemcpy(d_R, R, size, cudaMemcpyHostToDevice);
-    errG = cudaMemcpy(d_G, G, size, cudaMemcpyHostToDevice);
-    errB = cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error copying matrix to device: %s\n", cudaGetErrorString(errR));
-        cudaFree(d_R);
-        cudaFree(d_G);
-        cudaFree(d_B);
-        return;
-    }
-
-
-    // Define block and grid sizes
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    
-    // Launch the kernel
-    colorImgKernel<<<numBlocks, threadsPerBlock>>>(d_R, d_G, d_B, width, height);
-    
-    // Check for kernel launch errors
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
-    }
-
-    // Copy result from device to host
-    errR = cudaMemcpy(R, d_R, size, cudaMemcpyDeviceToHost);
-    errG = cudaMemcpy(G, d_G, size, cudaMemcpyDeviceToHost);
-    errB = cudaMemcpy(B, d_B, size, cudaMemcpyDeviceToHost);
-    if (errR != cudaSuccess || errG != cudaSuccess || errB != cudaSuccess) {
-        fprintf(stderr, "Error copying C to host: %s\n", cudaGetErrorString(errR));
-    }
-
-    // Free device memory
-    cudaFree(d_R);
-    cudaFree(d_G);
-    cudaFree(d_B);
-}
-
-extern "C" void fillMat(float *M, int width, int height, float c) {
-    float *d_M;
-    size_t size = width * height * sizeof(float);
-
-    // Allocate device memory and check for errors
-    cudaError_t err;
-    err = cudaMalloc((void**)&d_M, size);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error allocating device memory for matrix: %s\n", cudaGetErrorString(err));
-        return;
-    }
-
-    // Copy matrices from host to device
-    err = cudaMemcpy(d_M, M, size, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error copying matrix to device: %s\n", cudaGetErrorString(err));
-        cudaFree(d_M);
-        return;
-    }
-
-
-    // Define block and grid sizes
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    
-    // Launch the kernel
-    fillMatKernel<<<numBlocks, threadsPerBlock>>>(d_M, width, height, c);
-    
-    // Check for kernel launch errors
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
-    }
-
-    // Copy result from device to host
-    err = cudaMemcpy(M, d_M, size, cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Error copying C to host: %s\n", cudaGetErrorString(err));
-    }
-
-    // Free device memory
-    cudaFree(d_M);
-}
-
-
-
-
-extern "C" int cuda_device_check() {
-    int deviceCount;
-    cudaGetDeviceCount(&deviceCount);
-
-    if (deviceCount == 0) {
-        printf("No CUDA-capable device found.\n");
-        return -1; // Exit if no device is found
-    }
-
-    // Print device properties
-    cudaDeviceProp deviceProp;
-    cudaGetDeviceProperties(&deviceProp, 0); // Get properties of the first device
-    printf("Using device: %s\n", deviceProp.name);
-
+    cudaGraphicsUnregisterResource(cudaResource);
     return 0;
 }
+

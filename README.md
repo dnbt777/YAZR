@@ -46,7 +46,10 @@ I am only mid-way through developing the GPU ray tracer, but being able to go ba
 
 
 
+in order to get the GPU to run
+first, run
 
+sudo prime-select nvidia
 
 
 
