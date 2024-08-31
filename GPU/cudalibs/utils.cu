@@ -9,6 +9,9 @@
 #include <cmath>
 #include <cuda_gl_interop.h>
 
+
+#include <time.h>
+
 __managed__ int WIDTH;
 __managed__ int HEIGHT;
 __managed__ int CHANNELS;
@@ -16,6 +19,9 @@ __managed__ GLuint textureID;
 __managed__ GLenum target;
 __managed__ cudaGraphicsResource* cudaResource;
 __managed__ unsigned char* d_image;
+__managed__ unsigned int frame_count;
+__managed__ time_t last_time;
+__managed__ time_t now;
 
 __device__ float magnitude(float var[3]) {
     return sqrt(var[0]*var[0] + var[1]*var[1] + var[2]*var[2]);
@@ -156,15 +162,14 @@ __global__ void renderKernel(
             }
 
             // // // // // // // write_color // // // // // // //
-            screen_tex[idx] = color[0];
-            screen_tex[idx + 1] = color[1];
-            screen_tex[idx + 2] = color[2];
+            screen_tex[idx] = (unsigned char)(color[0]*255.0); // find some way to uh.. make this an unsigned char
+            screen_tex[idx + 1] = (unsigned char)(color[1]*255.0);
+            screen_tex[idx + 2] = (unsigned char)(color[2]*255.0);
+            // printf("(%d, %d, %d)\n", screen_tex[idx], screen_tex[idx+1], screen_tex[idx+2]);
 
         }
     }
 }
-
-__managed__ unsigned char tex;
 
 // instead of doing more samples I can just keep calling this over and over again!
 // I just have to initialize R G B to zeroes
@@ -187,7 +192,7 @@ extern "C" void render(
 
     // Launch the kernel
     renderKernel<<<numBlocks, threadsPerBlock>>>(
-            &tex,
+            d_image,
             width, height,
             pixel_delta_u0,
             pixel_delta_u1,
@@ -215,9 +220,9 @@ extern "C" void render(
  
 void displayTexture() {
     glClear(GL_COLOR_BUFFER_BIT);
-    printf("cleared\n");
+    printf("displayTexture(): cleared\n");
     glBindTexture(GL_TEXTURE_2D, textureID);
-    printf("texture bound\n");
+    printf("displayTexture(): texture bound\n");
     // draw a single quad covering the entire window
     // this is where the texture will be rendered
     glBegin(GL_QUADS);
@@ -226,27 +231,85 @@ void displayTexture() {
     glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
     glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
     glEnd(); // end drawing the quad
-    printf("quad drawn\n");
+    printf("displayTexture(): quad drawn\n");
     glutSwapBuffers();
-    printf("texture displayed\n");
+    printf("displayTexture(): texture displayed\n");
 }
 
 
+void glCheckError() {
+    GLenum err = glGetError();
+    if (err == GL_NO_ERROR) {
+        printf("glCheckError(): NO ERROR\n");
+    } else {
+        printf("glCheckError(): %s\n", gluErrorString(err));
+    }
+}
+
+void checkBuffer() {
+    glCheckError();
+    unsigned char* temp_buffer;
+    size_t buf_size = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
+    cudaError_t err = cudaMalloc((void **)&temp_buffer, buf_size);
+    // printf(cudaGetErrorString(err));
+    printf("checkBuffer(): allocated temp buffer memory\n");
+    glGetBufferSubData(GL_TEXTURE_BUFFER, 0, buf_size, &temp_buffer);
+    glCheckError();
+    printf("checkBuffer(): got buffer sub data\n");
+    printf("%d\n", sizeof(temp_buffer));
+}
+
+
+// void updateTexture() {
+//     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
+//     printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
+// 
+//     cudaGraphicsMapResources(1, &cudaResource, 0);
+//     glCheckError();
+//     printf("updateTexture(): resources mapped\n");
+//     glCheckError();
+//     cudaGraphicsResourceGetMappedPointer((void**)&d_image, &num_bytes, cudaResource);
+//     printf("updateTexture(): got mapped pointer\n");
+// 
+//     glCheckError();
+//     glBindTexture(target, textureID);
+//     printf("updateTexture(): texture bound\n");
+//     glCheckError();
+//     // glTexSubImage3D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB32F, GL_FLOAT, d_image); // never forget...
+//     glTexSubImage2D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, d_image);
+//     printf("updateTexture(): subimage2d written\n");
+//     glCheckError();
+//     cudaGraphicsUnmapResources(1, &cudaResource, 0);
+//     printf("updateTexture(): resources unmapped");
+// }
 
 void updateTexture() {
-    size_t num_bytes;
+    size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
+    printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
 
     cudaGraphicsMapResources(1, &cudaResource, 0);
-    printf("resources mapped\n");
-    cudaGraphicsResourceGetMappedPointer((void**)&d_image, &num_bytes, cudaResource);
-    printf("got mapped pointer\n");
+    glCheckError();
+    printf("updateTexture(): resources mapped\n");
+    glCheckError();
+    cudaArray_t cuda_Array; // inefficient. creates new array and then sends to device... every frame...
+    cudaGraphicsSubResourceGetMappedArray(&cuda_Array, cudaResource, 0, 0);
+    cudaMemcpyToArray(cuda_Array, 0, 0, d_image,num_bytes,cudaMemcpyDeviceToDevice);
+    printf("updateTexture(): got mapped pointer\n");
 
-    glBindTexture(target, textureID);
-    printf("texture bound\n");
-    glTexSubImage2D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB32F, GL_UNSIGNED_BYTE, d_image);
-    printf("subimage2d written\n");
     cudaGraphicsUnmapResources(1, &cudaResource, 0);
-    printf("resources unmapped");
+    printf("updateTexture(): resources unmapped\n");
+    glutPostRedisplay();
+
+
+   //  if (frame_count == 60) {
+   //      frame_count = 0;
+   //      last_time = now;
+   //      time(&now);
+   //      float fps = 60 / (now - last_time);
+   //      printf("FPS: %f\n", fps);
+   //  }
+   //  frame_count += 1;
+
 }
 
 
@@ -266,31 +329,50 @@ extern "C" int initScene(
     HEIGHT = height;
     target = GL_TEXTURE_2D;
 
+    // set up FPS stuff
+    frame_count = 0;
+    time(&last_time);
+
+    glCheckError();
+
     // Create a windowed mode window and its OpenGL context
     int argc = 0; // workaround for not passing argc and argv in via main()
     glutInit(&argc, NULL);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
+    glCheckError();
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB); // does this support GLUT_RGB32F?
+    glCheckError();
     glutInitWindowSize(width, height);
+    glCheckError();
     glutCreateWindow("CUDA OpenGL Interop");
-    printf("Window created\n");
+    glCheckError();
+    printf("main(): Window created\n");
 
     // initialize glew
     glewInit();
-    printf("glew initialized\n");
+    printf("main(): glew initialized\n");
+    glCheckError();
 
     //initOpenGL
     glEnable(target);
+    glCheckError();
     glGenTextures(1, &textureID);
+    glCheckError();
     glBindTexture(target, textureID);
+    glCheckError();
     
-    glTexImage2D(target, 0, GL_RGB32F, WIDTH, HEIGHT, 0, GL_RGB32F, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(target, 0, GL_RGB, WIDTH, HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL); //...
+    glCheckError();
     
     glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glCheckError();
     glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    printf("OpenGL initiailized\n");
+    glCheckError();
+    printf("main(): OpenGL initiailized\n");
+    glCheckError();
 
     //initCUDA
-    cudaMalloc((void**)&d_image, width * height * CHANNELS * sizeof(unsigned char));
+    // MAKE SURE TO CHANGE IF TYPE OF TEXTURE ARRAY CHANGES - i.e. unsigned char -> float
+    cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char)); 
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
     renderKernel<<<gridSize, blockSize>>>(
@@ -312,16 +394,21 @@ extern "C" int initScene(
     );
     cudaDeviceSynchronize();
     cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
-    printf("cuda initialized\n");
+    printf("main(): cuda initialized\n");
+
+    // checkBuffer();
 
     // other stuff    
     glutDisplayFunc(displayTexture);
-    printf("texture display func set\n");
+    glCheckError();
+    printf("main(): texture display func set\n");
     glutIdleFunc(updateTexture);
-    printf("texture update func set\n");
+    glCheckError();
+    printf("main(): texture update func set\n");
     glutMainLoop();
 
     cudaGraphicsUnregisterResource(cudaResource);
+    cudaFree(d_image); // defer. should be separate function
     return 0;
 }
 

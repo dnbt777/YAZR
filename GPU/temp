@@ -1,0 +1,116 @@
+#include <cuda_runtime.h> // Include CUDA runtime API
+#include <GL/glew.h>     // Include GLEW for OpenGL extension handling
+#include <GL/glut.h>     // Include GLUT for windowing and OpenGL context
+#include <iostream>      // Include iostream for standard I/O
+
+// Define constants for image dimensions and color channels
+const int WIDTH = 1000;  // Width of the image
+const int HEIGHT = 1000; // Height of the image
+const int CHANNELS = 3;  // Number of color channels (RGB)
+
+// Declare OpenGL texture and CUDA graphics resource
+GLuint texture; // OpenGL texture ID
+cudaGraphicsResource* cudaResource; // CUDA graphics resource for OpenGL texture
+
+// CUDA kernel to generate an image
+__global__ void generateImage(unsigned char* image, int width, int height) {
+    // Calculate the pixel coordinates (x, y) for the current thread
+    int x = blockIdx.x * blockDim.x + threadIdx.x; // X coordinate
+    int y = blockIdx.y * blockDim.y + threadIdx.y; // Y coordinate
+
+    // Check if the pixel coordinates are within the image bounds
+    if (x < width && y < height) {
+        // Calculate the index in the 1D array for the RGB values
+        int idx = (y * width + x) * CHANNELS; // Index for the pixel
+
+        // Set the RGB values based on the pixel coordinates
+        image[idx] = (unsigned char)(x % 256);     // Red channel based on x
+        image[idx + 1] = (unsigned char)(y % 256); // Green channel based on y
+        image[idx + 2] = 128;                       // Blue channel set to a constant value
+    }
+}
+
+// OpenGL display function to render the texture
+void display() {
+    glClear(GL_COLOR_BUFFER_BIT); // Clear the color buffer
+    glBindTexture(GL_TEXTURE_2D, texture); // Bind the OpenGL texture
+
+    // Draw a quad that covers the entire window
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, -1.0f); // Bottom left
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, -1.0f);  // Bottom right
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);   // Top right
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);  // Top left
+    glEnd(); // End drawing the quad
+
+    glutSwapBuffers(); // Swap the front and back buffers to display the rendered image
+}
+
+// OpenGL initialization function
+void initOpenGL() {
+    glEnable(GL_TEXTURE_2D); // Enable 2D texturing
+    glGenTextures(1, &texture); // Generate one texture ID
+    glBindTexture(GL_TEXTURE_2D, texture); // Bind the texture ID
+
+    // Allocate memory for the texture with no initial data
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, WIDTH, HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    
+    // Set texture parameters for filtering
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); // Linear filtering for minification
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); // Linear filtering for magnification
+}
+
+// CUDA initialization function
+void initCUDA() {
+    unsigned char* d_image; // Pointer for device image data
+    // Allocate memory on the GPU for the image
+    cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char));
+
+    // Launch the kernel to generate the image
+    dim3 blockSize(16, 16); // Define block size (16x16 threads)
+    dim3 gridSize((WIDTH + blockSize.x - 1) / blockSize.x, (HEIGHT + blockSize.y - 1) / blockSize.y); // Calculate grid size
+    generateImage<<<gridSize, blockSize>>>(d_image, WIDTH, HEIGHT); // Launch the kernel
+    cudaDeviceSynchronize(); // Wait for the kernel to finish
+
+    // Register the OpenGL texture with CUDA for interoperability
+    cudaGraphicsGLRegisterImage(&cudaResource, texture, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsNone);
+}
+
+// Function to update the OpenGL texture with data from CUDA
+void updateTexture() {
+    unsigned char* d_image; // Pointer for device image data
+    size_t num_bytes; // Variable to hold the size of the mapped resource
+
+    // Map the CUDA graphics resource to access the image data
+    cudaGraphicsMapResources(1, &cudaResource, 0);
+    // Get the mapped pointer to the image data
+    cudaGraphicsResourceGetMappedPointer((void**&d_image, &num_bytes, cudaResource);
+
+    // Update the OpenGL texture with the CUDA data
+    glBindTexture(GL_TEXTURE_2D, texture); // Bind the texture
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, d_image); // Update texture data
+
+    // Unmap the CUDA graphics resource
+    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+}
+
+// Main function
+int main(int argc, char** argv) {
+    glutInit(&argc, argv); // Initialize GLUT
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB); // Set display mode to double buffering and RGB
+    glutInitWindowSize(WIDTH, HEIGHT); // Set the window size
+    glutCreateWindow("CUDA OpenGL Interop"); // Create the window with a title
+
+    glewInit(); // Initialize GLEW to manage OpenGL extensions
+    initOpenGL(); // Call the OpenGL initialization function
+    initCUDA(); // Call the CUDA initialization function
+
+    glutDisplayFunc(display); // Register the display callback function
+    glutIdleFunc(updateTexture); // Register the idle callback function to update the texture
+    glutMainLoop(); // Enter the GLUT main loop
+
+    // Unregister the CUDA graphics resource before exiting
+    cudaGraphicsUnregisterResource(cudaResource);
+    return 0; // Return success
+}
+)
