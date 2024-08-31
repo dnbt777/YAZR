@@ -88,7 +88,9 @@ __global__ void renderKernel(
     // one step at a time. first we just trace a single ray per pixel
     for (int i=0;i<samples;i++) {
         if (row < height && col < width) {
-            int idx = (row*width + col) * 3; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
+            int idxr = (row*width + col) * 1; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
+            int idxg = (row*width + col) * 2;
+            int idxb =  (row*width + col) * 3;
             // // // // // // // ray color func here // // // // // // //
             // pixel's center in the viewport
             // uh, I think...
@@ -162,9 +164,9 @@ __global__ void renderKernel(
             }
 
             // // // // // // // write_color // // // // // // //
-            screen_tex[idx] = (unsigned char)(color[0]*255.0); // find some way to uh.. make this an unsigned char
-            screen_tex[idx + 1] = (unsigned char)(color[1]*255.0);
-            screen_tex[idx + 2] = (unsigned char)(color[2]*255.0);
+            screen_tex[idxr] = (unsigned char)(color[0]*255.0); // find some way to uh.. make this an unsigned char
+            screen_tex[idxg] = (unsigned char)(color[1]*255.0);
+            screen_tex[idxb] = (unsigned char)(color[2]*255.0);
             // printf("(%d, %d, %d)\n", screen_tex[idx], screen_tex[idx+1], screen_tex[idx+2]);
 
         }
@@ -218,25 +220,6 @@ extern "C" void render(
 }
 
  
-void displayTexture() {
-    glClear(GL_COLOR_BUFFER_BIT);
-    printf("displayTexture(): cleared\n");
-    glBindTexture(GL_TEXTURE_2D, textureID);
-    printf("displayTexture(): texture bound\n");
-    // draw a single quad covering the entire window
-    // this is where the texture will be rendered
-    glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, -1.0f);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, -1.0f);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
-    glEnd(); // end drawing the quad
-    printf("displayTexture(): quad drawn\n");
-    glutSwapBuffers();
-    printf("displayTexture(): texture displayed\n");
-}
-
-
 void glCheckError() {
     GLenum err = glGetError();
     if (err == GL_NO_ERROR) {
@@ -246,58 +229,77 @@ void glCheckError() {
     }
 }
 
+void displayTexture() {
+    glClear(GL_COLOR_BUFFER_BIT);
+    // printf("displayTexture(): cleared\n");
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    // printf("displayTexture(): texture bound\n");
+    // draw a single quad covering the entire window
+    // this is where the texture will be rendered
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, -1.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, -1.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, 1.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, 1.0f);
+    glEnd(); // end drawing the quad
+    // printf("displayTexture(): quad drawn\n");
+    glutSwapBuffers();
+    // printf("displayTexture(): texture displayed\n");
+}
+
+
 void checkBuffer() {
-    glCheckError();
+    // glCheckError();
     unsigned char* temp_buffer;
     size_t buf_size = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
     cudaError_t err = cudaMalloc((void **)&temp_buffer, buf_size);
-    // printf(cudaGetErrorString(err));
-    printf("checkBuffer(): allocated temp buffer memory\n");
+    // // printf(cudaGetErrorString(err));
+    // printf("checkBuffer(): allocated temp buffer memory\n");
     glGetBufferSubData(GL_TEXTURE_BUFFER, 0, buf_size, &temp_buffer);
-    glCheckError();
-    printf("checkBuffer(): got buffer sub data\n");
-    printf("%d\n", sizeof(temp_buffer));
+    // glCheckError();
+    // printf("checkBuffer(): got buffer sub data\n");
+    // printf("%d\n", sizeof(temp_buffer));
 }
 
 
 // void updateTexture() {
 //     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
-//     printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
+//     // printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
 // 
 //     cudaGraphicsMapResources(1, &cudaResource, 0);
 //     glCheckError();
-//     printf("updateTexture(): resources mapped\n");
+//     // printf("updateTexture(): resources mapped\n");
 //     glCheckError();
 //     cudaGraphicsResourceGetMappedPointer((void**)&d_image, &num_bytes, cudaResource);
-//     printf("updateTexture(): got mapped pointer\n");
+//     // printf("updateTexture(): got mapped pointer\n");
 // 
 //     glCheckError();
 //     glBindTexture(target, textureID);
-//     printf("updateTexture(): texture bound\n");
+//     // printf("updateTexture(): texture bound\n");
 //     glCheckError();
 //     // glTexSubImage3D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB32F, GL_FLOAT, d_image); // never forget...
 //     glTexSubImage2D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, d_image);
-//     printf("updateTexture(): subimage2d written\n");
+//     // printf("updateTexture(): subimage2d written\n");
 //     glCheckError();
 //     cudaGraphicsUnmapResources(1, &cudaResource, 0);
-//     printf("updateTexture(): resources unmapped");
+//     // printf("updateTexture(): resources unmapped");
 // }
 
 void updateTexture() {
     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
-    printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
+    // printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
 
     cudaGraphicsMapResources(1, &cudaResource, 0);
-    glCheckError();
-    printf("updateTexture(): resources mapped\n");
-    glCheckError();
+    // glCheckError();
+    // printf("updateTexture(): resources mapped\n");
+    // glCheckError();
     cudaArray_t cuda_Array; // inefficient. creates new array and then sends to device... every frame...
     cudaGraphicsSubResourceGetMappedArray(&cuda_Array, cudaResource, 0, 0);
     cudaMemcpyToArray(cuda_Array, 0, 0, d_image,num_bytes,cudaMemcpyDeviceToDevice);
-    printf("updateTexture(): got mapped pointer\n");
+    // printf("updateTexture(): got mapped pointer\n");
 
     cudaGraphicsUnmapResources(1, &cudaResource, 0);
-    printf("updateTexture(): resources unmapped\n");
+    // printf("updateTexture(): resources unmapped\n");
     glutPostRedisplay();
 
 
@@ -306,7 +308,7 @@ void updateTexture() {
    //      last_time = now;
    //      time(&now);
    //      float fps = 60 / (now - last_time);
-   //      printf("FPS: %f\n", fps);
+   //      // printf("FPS: %f\n", fps);
    //  }
    //  frame_count += 1;
 
@@ -396,19 +398,58 @@ extern "C" int initScene(
     cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
     printf("main(): cuda initialized\n");
 
-    // checkBuffer();
-
     // other stuff    
-    glutDisplayFunc(displayTexture);
-    glCheckError();
-    printf("main(): texture display func set\n");
-    glutIdleFunc(updateTexture);
-    glCheckError();
-    printf("main(): texture update func set\n");
-    glutMainLoop();
+    // glutDisplayFunc(displayTexture);
+    // glCheckError();
+    // printf("main(): texture display func set\n");
+    // glutIdleFunc(updateTexture);
+    // glCheckError();
+    // printf("main(): texture update func set\n");
+    // glutMainLoop();
 
-    cudaGraphicsUnregisterResource(cudaResource);
-    cudaFree(d_image); // defer. should be separate function
+    // cudaGraphicsUnregisterResource(cudaResource);
+    // cudaFree(d_image); // defer. should be separate function
+    // checkBuffer();
     return 0;
+}
+
+extern "C" int render_scene(
+    int width, int height,
+    const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
+    const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
+    const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
+    const float origin0, const float origin1, const float origin2,
+    int samples) {
+    // in the future... maybe keep objects on the device or something idk
+    // and manipulate the memory from zig.. and run rendering on a loop
+
+    dim3 blockSize(16, 16);
+    dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
+    renderKernel<<<gridSize, blockSize>>>(
+        d_image,
+        width, height,
+        pixel_delta_u0,
+        pixel_delta_u1,
+        pixel_delta_u2,
+        pixel_delta_v0,
+        pixel_delta_v1,
+        pixel_delta_v2,
+        pixel00_loc0,
+        pixel00_loc1,
+        pixel00_loc2,
+        origin0,
+        origin1,
+        origin2,
+        samples
+    );
+    cudaDeviceSynchronize();
+
+
+    displayTexture();
+    updateTexture();
+
+
+    return 0;
+
 }
 

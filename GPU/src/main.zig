@@ -41,6 +41,23 @@ extern "c" fn render(
     origin2: f32, // not sure if this should be a slice...
     samples: u16,
 ) void;
+extern "c" fn render_scene(
+    width: u16,
+    height: u16,
+    pixel_delta_u0: f32, // degenerate way to do it but.. whatever
+    pixel_delta_u1: f32,
+    pixel_delta_u2: f32,
+    pixel_delta_v0: f32,
+    pixel_delta_v1: f32,
+    pixel_delta_v2: f32,
+    pixel00_loc0: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
+    pixel00_loc1: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
+    pixel00_loc2: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
+    origin0: f32, // not sure if this should be a slice...
+    origin1: f32, // not sure if this should be a slice...
+    origin2: f32, // not sure if this should be a slice...
+    samples: u16,
+) void;
 
 //extern "c" fn renderKernel(imageR, imageG, imageB, width, height, samples_per_pixel, depth, hittables_flattened, num_hittables)
 
@@ -121,8 +138,9 @@ pub fn main() !void {
 
     // shoot rays and send to images
     const start2 = time();
-    for (0..60) |_| {
-        render(
+    for (0..60) |d| {
+        const dx: f32 = 0.5 - @as(f32, @floatFromInt(d)) / 60.0;
+        render_scene(
             //  &image[0][0],
             //  &image[1][0],
             //  &image[2][0],
@@ -137,9 +155,9 @@ pub fn main() !void {
             pixel00_loc[0],
             pixel00_loc[1],
             pixel00_loc[2],
-            origin[0],
-            origin[1],
-            origin[2],
+            origin[0] + dx,
+            origin[1] + dx,
+            origin[2] + dx,
             samples,
         );
     }
