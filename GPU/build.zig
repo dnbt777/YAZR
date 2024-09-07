@@ -39,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .owner = b,
         .sub_path = "cudalibs",
     } });
+    exe.linkSystemLibrary("X11");
     exe.linkSystemLibrary("utils"); // utils.cu, or, libutils.so
     // exe.linkSystemLibrary(library name here);
     exe.linkLibC();

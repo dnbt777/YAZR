@@ -11,7 +11,10 @@
 
 
 #include <time.h>
+#include <math.h>
 
+
+// image
 __managed__ int WIDTH;
 __managed__ int HEIGHT;
 __managed__ int CHANNELS;
@@ -22,6 +25,11 @@ __managed__ unsigned char* d_image;
 __managed__ unsigned int frame_count;
 __managed__ time_t last_time;
 __managed__ time_t now;
+
+// game rendering
+__managed__ int OBJ_COUNT; 
+
+
 
 __device__ float magnitude(float var[3]) {
     return sqrt(var[0]*var[0] + var[1]*var[1] + var[2]*var[2]);
@@ -61,14 +69,73 @@ extern "C" int cuda_device_check() {
 // __managed__ float d_R[1000 * 1000], d_G[1000*1000], d_B[1000*1000];
 
 
-// todo - make *tex managed
+// ok.. this needs to be in THE EXACT SAME ORDER as zig
+struct Sphere {
+    float center[3];
+    float radius;
+};
+
+struct Ray {
+    float tmin;
+    float tmax;
+    float direction[3];
+    float origin[3];
+};
+
+struct HitRecord {
+    float p[3];
+    float normal[3];
+    float t;
+    bool front_face;
+};
+
+__device__ float dot(float* v1, float* v2) {
+    return (
+            v1[0]*v2[0] +
+            v1[1]*v2[1] +
+            v1[2]*v2[2]
+    );
+}
+
+// probably just unroll this lol it only shows up once...
+// (OPTIMIZATION) CONVERT TO IF ELSE STATEMENT OR SOMETHING
+// actually no dont
+__device__ void set_face_normal(HitRecord* hit_record, Ray& r, float outward_normal[3]) {
+    // cannot be float* because then you cannot assign to it.. I think? 
+    hit_record->normal[0] = outward_normal[0]; 
+    hit_record->normal[1] = outward_normal[1];
+    hit_record->normal[2] = outward_normal[2];
+    if (!(dot(r.direction, outward_normal) < 0)) {
+       hit_record->normal[0] = hit_record->normal[0] * -1;
+       hit_record->normal[1] = hit_record->normal[1] * -1;
+       hit_record->normal[2] = hit_record->normal[2] * -1;
+    }
+}
+ 
+
+// returns the point where the ray is at time=t
+__device__ void at(Ray* r, float t, float position[3]) {
+    position[0] = r->origin[0] + t*r->direction[0];
+    position[1] = r->origin[1] + t*r->direction[1];
+    position[2] = r->origin[2] + t*r->direction[2];
+}
+
+
+// the 'level' will be loaded into memory at init (one transfer from host to device)
+// these are static objects
+// in the future there will also be dynamic objects, a smaller array of objects that often update that is passed back and forth
+// the goal is to minimize unnecessary transfers, since they are often one of the largest sources of inefficiency
+__managed__ struct Sphere level_geometry[256]; // this may cause an error since most of these will be null...
+
+// this is what gets run on the GPU
 __global__ void renderKernel(
         unsigned char* screen_tex, int width, int height,
-        const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
+        const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2, // float* pixel_delta_u..
         const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
         const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
         const float origin0, const float origin1, const float origin2,
         int samples
+        //dynamic_level_objects,
         ) {
         // int samples_per_pixel, int depth,
         // int hittables_flattened, int num_hittables) { //idk what to do about hittable type
@@ -77,20 +144,37 @@ __global__ void renderKernel(
 
     float pixel_center[3];
     float color[3]; 
-    float direction[3];
 
-    float unit_direction[3];
+    struct Ray ray;
+
+    float unit_ray_direction[3];
     float magnitude;
+
+    unsigned int idxr, idxg, idxb;
+    
+    float hit_sphere;
+    //int level_geometry_length = sizeof(level_geometry)/sizeof(level_geometry[0]); 
+    struct Sphere sphere; // should be a pointer probably (OPTIMIZATION)
+
+    float outward_normal[3];
+    float oc[3];
+    float a, h, c, discriminant;
+    float sqrtd, root;
+    float N[3];
+
+    ray.tmin = 0;
+    ray.tmax = 10000.0;
 
     // execute threads from (0,0) to (height*ceil(sqrt(samples_per_pixel)), width*ceil(sqrt(samples_per_pixel)))
     // space has to fit each thread or whatever
     // int sqrt_samples_per_pixel = ceil(sqrt(samples_per_pixel)); // may cause issues affecting memory in outside executed threads...
     // one step at a time. first we just trace a single ray per pixel
-    for (int i=0;i<samples;i++) {
-        if (row < height && col < width) {
-            int idxr = (row*width + col) * 1; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
-            int idxg = (row*width + col) * 2;
-            int idxb =  (row*width + col) * 3;
+    if (row < HEIGHT && col < WIDTH) {
+        for (int i=0;i<samples;i++) {
+            // create ray
+            idxr = (col*WIDTH + row) * 4 + 0; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
+            idxg = (col*WIDTH + row) * 4 + 1;
+            idxb =  (col*WIDTH + row) * 4 + 2;
             // // // // // // // ray color func here // // // // // // //
             // pixel's center in the viewport
             // uh, I think...
@@ -98,65 +182,102 @@ __global__ void renderKernel(
             pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1);
             pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2);
 
-            direction[0] = pixel_center[0] - origin0;
-            direction[1] = pixel_center[1] - origin1;
-            direction[2] = pixel_center[2] - origin2;
+            ray.direction[0] = pixel_center[0] - origin0;
+            ray.direction[1] = pixel_center[1] - origin1;
+            ray.direction[2] = pixel_center[2] - origin2;
 
+            ray.origin[0] = origin0;
+            ray.origin[1] = origin1;
+            ray.origin[2] = origin2;
             
-
-            // ray_color func (we have origin and direction, which == ray)
-
-            //for sphere in...
-            // hit sphere
-            float hit_sphere;
-            float sphere_center[3];
-            sphere_center[0] = 0.0;
-            sphere_center[1] = 0.0;
-            sphere_center[2] = -1.0;
-            float sphere_radius = 0.5;
-            float oc[3];
-            oc[0] = sphere_center[0] - origin0;
-            oc[1] = sphere_center[1] - origin1;
-            oc[2] = sphere_center[2] - origin2;
-            float a = direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]; //dot
-            float b = -2.0 * (
-                    direction[0]*oc[0] +
-                    direction[1]*oc[1] +
-                    direction[2]*oc[2]
-                    );
-            float c = (
+            struct HitRecord hit_record;
+            struct HitRecord temp_hit_record;
+            bool hit_anything = false;
+            float closest_so_far = ray.tmax;
+            for (int s=0;s<OBJ_COUNT;s++){
+                // ray_color func (we have origin and ray.direction, which == ray)
+                // for sphere in spheres
+                // hit sphere
+                sphere = level_geometry[s]; // in the future, there will be more than spheres.
+                oc[0] = sphere.center[0] - origin0; // oc = origin-to-center
+                oc[1] = sphere.center[1] - origin1;
+                oc[2] = sphere.center[2] - origin2;
+                a = ray.direction[0]*ray.direction[0] + ray.direction[1]*ray.direction[1] + ray.direction[2]*ray.direction[2]; //dot
+                h = (
+                    ray.direction[0]*oc[0] +
+                    ray.direction[1]*oc[1] +
+                    ray.direction[2]*oc[2]
+                );
+                c = (
                     oc[0]*oc[0] +
                     oc[1]*oc[1] +
-                    oc[2]*oc[2] - sphere_radius*sphere_radius
-                    );
-            float discriminant = b*b - 4*a*c;
-            if (discriminant < 0) {
-                hit_sphere = -1.0;
-            } else {
-                hit_sphere = (-b - sqrt(discriminant)) / (2.0*a);
+                    oc[2]*oc[2] - sphere.radius*sphere.radius
+                );
+                discriminant = h*h - a*c;
+                if (discriminant < 0) {
+                    continue;
+                }
+
+                sqrtd = sqrtf(discriminant);
+
+                root = (h - sqrtd) / a;
+                if (root <= ray.tmin || closest_so_far <= root) {
+                    root = (h + sqrtd) / a;
+                    if (root <= ray.tmin || closest_so_far <= root) {
+                        continue;
+                    }
+                }
+                
+                temp_hit_record.t = root;
+                at(
+                        &ray,
+                        temp_hit_record.t,
+                        temp_hit_record.p
+                        ); // overwrites p with the value
+                temp_hit_record.normal[0] = (temp_hit_record.p[0] - sphere.center[0]) / sphere.radius;
+                temp_hit_record.normal[1] = (temp_hit_record.p[1] - sphere.center[1]) / sphere.radius;
+                temp_hit_record.normal[2] = (temp_hit_record.p[2] - sphere.center[2]) / sphere.radius;
+
+                outward_normal[0] = (temp_hit_record.p[0] - sphere.center[0]) / sphere.radius;
+                outward_normal[1] = (temp_hit_record.p[1] - sphere.center[1]) / sphere.radius;
+                outward_normal[2] = (temp_hit_record.p[2] - sphere.center[2]) / sphere.radius;
+
+                set_face_normal(&temp_hit_record, ray, outward_normal); 
+
+                hit_sphere = true;
+                
+                closest_so_far = temp_hit_record.t;
+
             }
             
-            float t = hit_sphere;
+            hit_record = temp_hit_record;
+                
+            if (hit_sphere) {
+                at(&ray, hit_record.t, N);
+                // N[0] = (origin0 + t*ray.direction[0]) - 0.0;
+                // N[1] = (origin1 + t*ray.direction[1]) - 0.0;
+                // N[2] = (origin2 + t*ray.direction[2]) - -1.0;
+                // printf("OTHER %f %f %f\n", origin0, t, ray.direction[0]);
+                // printf("N %f %f %f\n", N[0], N[1], N[2]);
 
-            if (t > 0.0) {
-                float N[3];
-                N[0] = (origin0 + t*direction[0]) - 0.0;
-                N[1] = (origin1 + t*direction[1]) - 0.0;
-                N[2] = (origin2 + t*direction[2]) - -1.0;
                 unitvector(N); // turns N into its unit vector
-
+                // printf("unit %f %f %f\n", N[0], N[1], N[2]);
                 color[0] = 0.5*(N[0] + 1.0);
                 color[1] = 0.5*(N[1] + 1.0);
                 color[2] = 0.5*(N[2] + 1.0);
-            } else {
+            } else { // if no sphere hit... draw sky
                 // ray_color
-                // unit_direction
-                magnitude = sqrt(direction[0]*direction[0] + direction[1]*direction[1] + direction[2]*direction[2]);
-                unit_direction[0] = direction[0]/magnitude;
-                unit_direction[1] = direction[1]/magnitude;
-                unit_direction[2] = direction[2]/magnitude;
+                // unit_ray.direction
+                magnitude = sqrt(
+                        ray.direction[0]*ray.direction[0] +
+                        ray.direction[1]*ray.direction[1] +
+                        ray.direction[2]*ray.direction[2]
+                );
+                unit_ray_direction[0] = ray.direction[0]/magnitude;
+                unit_ray_direction[1] = ray.direction[1]/magnitude;
+                unit_ray_direction[2] = ray.direction[2]/magnitude;
 
-                float a = 0.5*(unit_direction[1] + 1.0);
+                a = 0.5*(unit_ray_direction[1] + 1.0);
 
                 color[0] = (1.0-a) * 1.0 + a * 0.5;
                 color[1] = (1.0-a) * 1.0 + a * 0.7;
@@ -168,7 +289,6 @@ __global__ void renderKernel(
             screen_tex[idxg] = (unsigned char)(color[1]*255.0);
             screen_tex[idxb] = (unsigned char)(color[2]*255.0);
             // printf("(%d, %d, %d)\n", screen_tex[idx], screen_tex[idx+1], screen_tex[idx+2]);
-
         }
     }
 }
@@ -248,43 +368,6 @@ void displayTexture() {
 }
 
 
-void checkBuffer() {
-    // glCheckError();
-    unsigned char* temp_buffer;
-    size_t buf_size = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
-    cudaError_t err = cudaMalloc((void **)&temp_buffer, buf_size);
-    // // printf(cudaGetErrorString(err));
-    // printf("checkBuffer(): allocated temp buffer memory\n");
-    glGetBufferSubData(GL_TEXTURE_BUFFER, 0, buf_size, &temp_buffer);
-    // glCheckError();
-    // printf("checkBuffer(): got buffer sub data\n");
-    // printf("%d\n", sizeof(temp_buffer));
-}
-
-
-// void updateTexture() {
-//     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
-//     // printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
-// 
-//     cudaGraphicsMapResources(1, &cudaResource, 0);
-//     glCheckError();
-//     // printf("updateTexture(): resources mapped\n");
-//     glCheckError();
-//     cudaGraphicsResourceGetMappedPointer((void**)&d_image, &num_bytes, cudaResource);
-//     // printf("updateTexture(): got mapped pointer\n");
-// 
-//     glCheckError();
-//     glBindTexture(target, textureID);
-//     // printf("updateTexture(): texture bound\n");
-//     glCheckError();
-//     // glTexSubImage3D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB32F, GL_FLOAT, d_image); // never forget...
-//     glTexSubImage2D(target, 0, 0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, d_image);
-//     // printf("updateTexture(): subimage2d written\n");
-//     glCheckError();
-//     cudaGraphicsUnmapResources(1, &cudaResource, 0);
-//     // printf("updateTexture(): resources unmapped");
-// }
-
 void updateTexture() {
     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
     // printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
@@ -301,20 +384,7 @@ void updateTexture() {
     cudaGraphicsUnmapResources(1, &cudaResource, 0);
     // printf("updateTexture(): resources unmapped\n");
     glutPostRedisplay();
-
-
-   //  if (frame_count == 60) {
-   //      frame_count = 0;
-   //      last_time = now;
-   //      time(&now);
-   //      float fps = 60 / (now - last_time);
-   //      // printf("FPS: %f\n", fps);
-   //  }
-   //  frame_count += 1;
-
 }
-
-
 
 // initialize the *tex, the window, etc given parameters.
 // 
@@ -324,7 +394,9 @@ extern "C" int initScene(
     const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
     const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
     const float origin0, const float origin1, const float origin2,
-    int samples) {
+    int samples,
+    struct Sphere* level_geometry_host,
+    int obj_count) {
 
     CHANNELS = 3;
     WIDTH = width;
@@ -372,6 +444,16 @@ extern "C" int initScene(
     printf("main(): OpenGL initiailized\n");
     glCheckError();
 
+
+    // init level geometry/statics
+    OBJ_COUNT = obj_count; // hardcoded for now. idc
+    //for (int obj_idx=0;obj_idx<level_geometry_length;obj_idx++) {
+    for (int obj_idx=0;obj_idx<OBJ_COUNT;obj_idx++) {
+        // EACH OBJ IS A GUARANTEED SPHERE FOR NOW
+        level_geometry[obj_idx] = level_geometry_host[obj_idx];
+    }
+    
+
     //initCUDA
     // MAKE SURE TO CHANGE IF TYPE OF TEXTURE ARRAY CHANGES - i.e. unsigned char -> float
     cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char)); 
@@ -393,6 +475,7 @@ extern "C" int initScene(
         origin1,
         origin2,
         samples
+        //dynamic_level_objects,
     );
     cudaDeviceSynchronize();
     cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
@@ -423,9 +506,12 @@ extern "C" int render_scene(
     // in the future... maybe keep objects on the device or something idk
     // and manipulate the memory from zig.. and run rendering on a loop
 
-    dim3 blockSize(16, 16);
-    dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
-    renderKernel<<<gridSize, blockSize>>>(
+    // dim3 blockSize(16, 16);
+    // dim3 gridSize((WIDTH + blockSize.x - 1) / blockSize.x, (HEIGHT + blockSize.y - 1) / blockSize.y);
+    // dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    dim3 threadsPerBlock(16, 16);
+    dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    renderKernel<<<numBlocks, threadsPerBlock>>>(
         d_image,
         width, height,
         pixel_delta_u0,
