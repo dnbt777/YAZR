@@ -25,6 +25,8 @@ pub extern "c" fn initScene(
     level_objects_host: *phys.Sphere,
     static_obj_count: u16,
     dynamic_obj_count: u16,
+    materials_host: *phys.Material,
+    material_count: u16,
 ) u16; // returns failure code or w/e
 
 pub extern "c" fn render_scene(

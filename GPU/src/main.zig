@@ -10,31 +10,45 @@ const c = @cImport({
 });
 
 pub fn main() !void {
-    // unused bc opengl now
-    // var allocator = std.heap.page_allocator;
-
     const N = 1000; // square for now
     const image_height = N;
     const image_width = N;
     const aspect_ratio: f32 = @as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height));
 
+    // initialize materials
+    const material_count = 2;
+    var materials_host: [256]phys.Material = undefined;
+    materials_host[0] = phys.Material{
+        .material_type = 0, // norm shading
+        .albedo = .{ 0.5, 0.5, 0.5 },
+    }; // do make_norm_material() or something idk
+    materials_host[1] = phys.Material{
+        .material_type = 1,
+        .albedo = .{ 0.5, 0.5, 0.5 },
+    }; // do make_albedo_material(0.5 0.5 0.5) or something
+
+    // static objects
     const static_obj_count = 4;
     var level_geometry_host: [256]phys.Sphere = undefined;
     level_geometry_host[0] = phys.Sphere{
         .center = .{ 0.0, 0.0, 0.5 },
         .radius = 0.5,
+        .material_id = 1,
     };
     level_geometry_host[1] = phys.Sphere{
         .center = .{ 0.0, 0.0, 2.0 },
         .radius = 0.5,
+        .material_id = 1,
     };
     level_geometry_host[2] = phys.Sphere{
         .center = .{ 2.0, 0.0, 0.0 },
         .radius = 0.5,
+        .material_id = 1,
     };
     level_geometry_host[3] = phys.Sphere{
         .center = .{ 0.0, -100.5, -1.0 },
         .radius = 100.0,
+        .material_id = 0, // define these materials. on the CPU. then in init(), send them to a material list. (static, stays on device). then index this material list.
     };
 
     var physics_obj_count: u16 = 100;
@@ -51,6 +65,7 @@ pub fn main() !void {
                 0.0 + row * radius * offset / 2,
             },
             .radius = radius,
+            .material_id = 1,
         };
 
         physics_objects.physical_properties[obj_idx] = phys.PhysicsProperties{
@@ -109,6 +124,8 @@ pub fn main() !void {
         &physics_objects.geometries[0],
         static_obj_count,
         physics_obj_count,
+        &materials_host[0],
+        material_count,
     );
 
     // i had an llm generate this block
@@ -227,7 +244,8 @@ pub fn main() !void {
 
                 physics_objects.geometries[physics_obj_count - 1] = phys.Sphere{
                     .center = origin, // start it at the camera's origin
-                    .radius = 0.25,
+                    .radius = 0.05,
+                    .material_id = 1,
                 };
 
                 physics_objects.physical_properties[physics_obj_count - 1] = phys.PhysicsProperties{

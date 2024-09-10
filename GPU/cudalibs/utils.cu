@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cuda_gl_interop.h>
 
-
 #include <time.h>
 #include <math.h>
 
@@ -29,7 +28,7 @@ __managed__ time_t now;
 // game rendering
 __managed__ int LEVEL_GEOMETRY_COUNT; 
 __managed__ int LEVEL_OBJECT_COUNT; 
-
+__managed__ int MATERIAL_COUNT;
 
 
 __device__ float magnitude(float var[3]) {
@@ -66,15 +65,38 @@ extern "C" int cuda_device_check() {
 
     return 0;
 }
-// nah opengl now
-// __managed__ float d_R[1000 * 1000], d_G[1000*1000], d_B[1000*1000];
 
-
-// ok.. this needs to be in THE EXACT SAME ORDER as zig
+// ok.. each struct's attributes need to be in THE EXACT SAME ORDER as zig (i assume)
 struct Sphere {
     float center[3];
     float radius;
+    int material_id; // the ID of the material.
 };
+
+
+
+
+// MATERIAL TYPES
+// 0 norm shading
+// 1 albedo
+// 2 metallic
+// 3 glass
+// 4 illumination
+// 5 texture
+struct Material {
+    unsigned int material_type; // double check this is a u8
+    float albedo[3]; //r, g, b   (add alpha as transparency)
+    // will eventually contain all possible properties
+    // not all properties will be used, this depends on material_type.
+};
+
+// the 'level' will be loaded into memory at init (one transfer from host to device)
+// these are static objects
+// in the future there will also be dynamic objects, a smaller array of objects that often update that is passed back and forth
+// the goal is to minimize unnecessary transfers, since they are often one of the largest sources of inefficiency
+__managed__ struct Sphere level_geometry[256]; // this may cause an error since most of these will be null...
+__managed__ struct Sphere level_objects[256]; // stored on device, updated every frame
+__managed__ struct Material materials[256]; // stored on device, never updated. stores material indexes
 
 struct Ray {
     float tmin;
@@ -86,6 +108,7 @@ struct Ray {
 struct HitRecord {
     float p[3];
     float normal[3];
+    unsigned int material_id;
     float t;
     bool front_face;
 };
@@ -122,12 +145,6 @@ __device__ void at(Ray* r, float t, float position[3]) {
 }
 
 
-// the 'level' will be loaded into memory at init (one transfer from host to device)
-// these are static objects
-// in the future there will also be dynamic objects, a smaller array of objects that often update that is passed back and forth
-// the goal is to minimize unnecessary transfers, since they are often one of the largest sources of inefficiency
-__managed__ struct Sphere level_geometry[256]; // this may cause an error since most of these will be null...
-__managed__ struct Sphere level_objects[256]; // stored on device, updated every frame
 
 
 // this is what gets run on the GPU
@@ -154,7 +171,6 @@ __global__ void renderKernel(
 
     unsigned int idxr, idxg, idxb;
     
-    float hit_sphere;
     struct Sphere sphere; // should be a pointer probably (OPTIMIZATION)
 
     float outward_normal[3];
@@ -179,9 +195,16 @@ __global__ void renderKernel(
             // // // // // // // ray color func here // // // // // // //
             // pixel's center in the viewport
             // uh, I think...
+
             pixel_center[0] = pixel00_loc0 + (row * pixel_delta_u0) + (col * pixel_delta_v0);
             pixel_center[1] = pixel00_loc1 + (row * pixel_delta_u1) + (col * pixel_delta_v1);
             pixel_center[2] = pixel00_loc2 + (row * pixel_delta_u2) + (col * pixel_delta_v2);
+
+            // offsets - should be random but... meh
+            pixel_center[0] += (i/samples) * (pixel_delta_u0 + pixel_delta_v0);
+            pixel_center[1] += (i/samples) * (pixel_delta_u1 + pixel_delta_v1);
+            pixel_center[2] += (i/samples) * (pixel_delta_u2 + pixel_delta_v2);
+
 
             ray.direction[0] = pixel_center[0] - origin0;
             ray.direction[1] = pixel_center[1] - origin1;
@@ -240,7 +263,7 @@ __global__ void renderKernel(
                         &ray,
                         temp_hit_record.t,
                         temp_hit_record.p
-                        ); // overwrites p with the value
+                ); // overwrites p with the value
                 temp_hit_record.normal[0] = (temp_hit_record.p[0] - sphere.center[0]) / sphere.radius;
                 temp_hit_record.normal[1] = (temp_hit_record.p[1] - sphere.center[1]) / sphere.radius;
                 temp_hit_record.normal[2] = (temp_hit_record.p[2] - sphere.center[2]) / sphere.radius;
@@ -250,6 +273,7 @@ __global__ void renderKernel(
                 outward_normal[2] = (temp_hit_record.p[2] - sphere.center[2]) / sphere.radius;
 
                 set_face_normal(&temp_hit_record, ray, outward_normal); 
+                temp_hit_record.material_id = sphere.material_id;
 
                 hit_sphere = true;
                 
@@ -261,17 +285,19 @@ __global__ void renderKernel(
                 
             if (hit_sphere) {
                 at(&ray, hit_record.t, N);
-                // N[0] = (origin0 + t*ray.direction[0]) - 0.0;
-                // N[1] = (origin1 + t*ray.direction[1]) - 0.0;
-                // N[2] = (origin2 + t*ray.direction[2]) - -1.0;
-                // printf("OTHER %f %f %f\n", origin0, t, ray.direction[0]);
-                // printf("N %f %f %f\n", N[0], N[1], N[2]);
-
                 unitvector(N); // turns N into its unit vector
                 // printf("unit %f %f %f\n", N[0], N[1], N[2]);
-                color[0] = 0.5*(N[0] + 1.0);
-                color[1] = 0.5*(N[1] + 1.0);
-                color[2] = 0.5*(N[2] + 1.0);
+                if (materials[hit_record.material_id].material_type == 0) {
+                    // norm shading material
+                    color[0] = 0.5*(N[0] + 1.0);
+                    color[1] = 0.5*(N[1] + 1.0);
+                    color[2] = 0.5*(N[2] + 1.0);
+                } else if (materials[hit_record.material_id].material_type == 1) {
+                    // albedo texture material
+                    color[0] = materials[hit_record.material_id].albedo[0];
+                    color[1] = materials[hit_record.material_id].albedo[1];
+                    color[2] = materials[hit_record.material_id].albedo[2];
+                }
             } else { // if no sphere hit... draw sky
                 // ray_color
                 // unit_ray.direction
@@ -358,7 +384,9 @@ extern "C" int initScene(
     int samples,
     struct Sphere* level_geometry_host,
     struct Sphere* level_objects_host,
-    int static_obj_count, int dynamic_obj_count) {
+    int static_obj_count, int dynamic_obj_count,
+    struct Material* materials_host,
+    int material_count) {
 
     CHANNELS = 3;
     WIDTH = width;
@@ -422,6 +450,12 @@ extern "C" int initScene(
         level_objects[obj_idx] = level_objects_host[obj_idx];
     }
     
+    // init materials
+    MATERIAL_COUNT = material_count;
+    for (int mat_idx=0;mat_idx<MATERIAL_COUNT;mat_idx++) {
+        materials[mat_idx] = materials_host[mat_idx];
+    }
+    
     //initCUDA
     // MAKE SURE TO CHANGE IF TYPE OF TEXTURE ARRAY CHANGES - i.e. unsigned char -> float
     cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char)); 
@@ -448,18 +482,6 @@ extern "C" int initScene(
     cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
     printf("main(): cuda initialized\n");
 
-    // other stuff    
-    // glutDisplayFunc(displayTexture);
-    // glCheckError();
-    // printf("main(): texture display func set\n");
-    // glutIdleFunc(updateTexture);
-    // glCheckError();
-    // printf("main(): texture update func set\n");
-    // glutMainLoop();
-
-    // cudaGraphicsUnregisterResource(cudaResource);
-    // cudaFree(d_image); // defer. should be separate function
-    // checkBuffer();
     return 0;
 }
 
