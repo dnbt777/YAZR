@@ -368,7 +368,7 @@ pub fn main() !void {
                 };
 
                 physics_objects.physical_properties[physics_obj_count - 1] = PhysicsProperties{
-                    .velocity = forward * splat(4.0), // shoot the ball forward
+                    .velocity = forward * splat(20.0), // shoot the ball forward
                     .mass = 1.0,
                     .acceleration = vec3(0, -9.8, 0),
                     .position = physics_objects.geometries[physics_obj_count - 1].center,
