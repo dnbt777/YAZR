@@ -161,7 +161,7 @@ pub fn main() !void {
     //     physical_properties: [256]PhysicsProperties,
     // }
 
-    const physics_obj_count = 100;
+    var physics_obj_count: u16 = 100;
     var physics_objects: PhysicsObjects = undefined;
     for (0..physics_obj_count) |obj_idx| {
         const offset = @as(f32, @floatFromInt(obj_idx));
@@ -358,8 +358,21 @@ pub fn main() !void {
                     0x09 => quit = true,
                     else => dx = 0,
                 }
-            } else if (event.type == c.ButtonPress) {
+            } else if (event.type == c.ButtonPress) { // mouse click
                 std.debug.print("Pew!", .{});
+                physics_obj_count += 1;
+
+                physics_objects.geometries[physics_obj_count - 1] = Sphere{
+                    .center = origin, // start it at the camera's origin
+                    .radius = 0.25,
+                };
+
+                physics_objects.physical_properties[physics_obj_count - 1] = PhysicsProperties{
+                    .velocity = forward * splat(4.0), // shoot the ball forward
+                    .mass = 1.0,
+                    .acceleration = vec3(0, -9.8, 0),
+                    .position = physics_objects.geometries[physics_obj_count - 1].center,
+                };
             }
         }
 
