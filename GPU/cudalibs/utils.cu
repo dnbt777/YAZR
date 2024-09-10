@@ -27,7 +27,8 @@ __managed__ time_t last_time;
 __managed__ time_t now;
 
 // game rendering
-__managed__ int OBJ_COUNT; 
+__managed__ int LEVEL_GEOMETRY_COUNT; 
+__managed__ int LEVEL_OBJECT_COUNT; 
 
 
 
@@ -126,6 +127,8 @@ __device__ void at(Ray* r, float t, float position[3]) {
 // in the future there will also be dynamic objects, a smaller array of objects that often update that is passed back and forth
 // the goal is to minimize unnecessary transfers, since they are often one of the largest sources of inefficiency
 __managed__ struct Sphere level_geometry[256]; // this may cause an error since most of these will be null...
+__managed__ struct Sphere level_objects[256]; // stored on device, updated every frame
+
 
 // this is what gets run on the GPU
 __global__ void renderKernel(
@@ -135,7 +138,6 @@ __global__ void renderKernel(
         const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
         const float origin0, const float origin1, const float origin2,
         int samples
-        //dynamic_level_objects,
         ) {
         // int samples_per_pixel, int depth,
         // int hittables_flattened, int num_hittables) { //idk what to do about hittable type
@@ -153,7 +155,6 @@ __global__ void renderKernel(
     unsigned int idxr, idxg, idxb;
     
     float hit_sphere;
-    //int level_geometry_length = sizeof(level_geometry)/sizeof(level_geometry[0]); 
     struct Sphere sphere; // should be a pointer probably (OPTIMIZATION)
 
     float outward_normal[3];
@@ -192,13 +193,17 @@ __global__ void renderKernel(
             
             struct HitRecord hit_record;
             struct HitRecord temp_hit_record;
-            bool hit_anything = false;
+            bool hit_sphere = false;
             float closest_so_far = ray.tmax;
-            for (int s=0;s<OBJ_COUNT;s++){
+            for (int s=0;s<(LEVEL_GEOMETRY_COUNT + LEVEL_OBJECT_COUNT);s++){
                 // ray_color func (we have origin and ray.direction, which == ray)
                 // for sphere in spheres
                 // hit sphere
-                sphere = level_geometry[s]; // in the future, there will be more than spheres.
+                if (s < LEVEL_GEOMETRY_COUNT) {
+                    sphere = level_geometry[s]; // could make this a reference instead...
+                } else {
+                    sphere = level_objects[s - LEVEL_GEOMETRY_COUNT];
+                }
                 oc[0] = sphere.center[0] - origin0; // oc = origin-to-center
                 oc[1] = sphere.center[1] - origin1;
                 oc[2] = sphere.center[2] - origin2;
@@ -215,6 +220,7 @@ __global__ void renderKernel(
                 );
                 discriminant = h*h - a*c;
                 if (discriminant < 0) {
+                    // no sphere hit
                     continue;
                 }
 
@@ -224,6 +230,7 @@ __global__ void renderKernel(
                 if (root <= ray.tmin || closest_so_far <= root) {
                     root = (h + sqrtd) / a;
                     if (root <= ray.tmin || closest_so_far <= root) {
+                        // no sphere hit
                         continue;
                     }
                 }
@@ -293,52 +300,6 @@ __global__ void renderKernel(
     }
 }
 
-// instead of doing more samples I can just keep calling this over and over again!
-// I just have to initialize R G B to zeroes
-// then on each pass, I just add the color
-// then at the end average them out..?
-// has flaws at high sampling but whatever
-extern "C" void render(
-        int width, int height,
-        const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
-        const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
-        const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
-        const float origin0, const float origin1, const float origin2,
-        int samples
-        ) {
-    // Define block and grid sizes
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
-    cudaError_t err;
-    // size_t size = width * height * sizeof(float);
-
-    // Launch the kernel
-    renderKernel<<<numBlocks, threadsPerBlock>>>(
-            d_image,
-            width, height,
-            pixel_delta_u0,
-            pixel_delta_u1,
-            pixel_delta_u2,
-            pixel_delta_v0,
-            pixel_delta_v1,
-            pixel_delta_v2,
-            pixel00_loc0,
-            pixel00_loc1,
-            pixel00_loc2,
-            origin0,
-            origin1,
-            origin2,
-            samples
-            );
-    
-    // Check for kernel launch errors
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
-    }
-
-}
-
  
 void glCheckError() {
     GLenum err = glGetError();
@@ -396,7 +357,8 @@ extern "C" int initScene(
     const float origin0, const float origin1, const float origin2,
     int samples,
     struct Sphere* level_geometry_host,
-    int obj_count) {
+    struct Sphere* level_objects_host,
+    int static_obj_count, int dynamic_obj_count) {
 
     CHANNELS = 3;
     WIDTH = width;
@@ -446,14 +408,20 @@ extern "C" int initScene(
 
 
     // init level geometry/statics
-    OBJ_COUNT = obj_count; // hardcoded for now. idc
+    LEVEL_GEOMETRY_COUNT = static_obj_count; // hardcoded for now. idc
     //for (int obj_idx=0;obj_idx<level_geometry_length;obj_idx++) {
-    for (int obj_idx=0;obj_idx<OBJ_COUNT;obj_idx++) {
+    for (int obj_idx=0;obj_idx<LEVEL_GEOMETRY_COUNT;obj_idx++) {
         // EACH OBJ IS A GUARANTEED SPHERE FOR NOW
         level_geometry[obj_idx] = level_geometry_host[obj_idx];
     }
+    // init level dynamic objects 
+    LEVEL_OBJECT_COUNT = dynamic_obj_count; // hardcoded for now. idc
+    //for (int obj_idx=0;obj_idx<level_geometry_length;obj_idx++) {
+    for (int obj_idx=0;obj_idx<LEVEL_OBJECT_COUNT;obj_idx++) {
+        // EACH OBJ IS A GUARANTEED SPHERE FOR NOW
+        level_objects[obj_idx] = level_objects_host[obj_idx];
+    }
     
-
     //initCUDA
     // MAKE SURE TO CHANGE IF TYPE OF TEXTURE ARRAY CHANGES - i.e. unsigned char -> float
     cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char)); 
@@ -475,7 +443,6 @@ extern "C" int initScene(
         origin1,
         origin2,
         samples
-        //dynamic_level_objects,
     );
     cudaDeviceSynchronize();
     cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
@@ -502,13 +469,16 @@ extern "C" int render_scene(
     const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
     const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
     const float origin0, const float origin1, const float origin2,
-    int samples) {
-    // in the future... maybe keep objects on the device or something idk
-    // and manipulate the memory from zig.. and run rendering on a loop
+    int samples,
+    Sphere* level_objects_host,
+    int dynamic_obj_count) {
 
-    // dim3 blockSize(16, 16);
-    // dim3 gridSize((WIDTH + blockSize.x - 1) / blockSize.x, (HEIGHT + blockSize.y - 1) / blockSize.y);
-    // dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    // update level dynamic objects 
+    LEVEL_OBJECT_COUNT = dynamic_obj_count;
+    for (int obj_idx=0;obj_idx<LEVEL_OBJECT_COUNT;obj_idx++) {
+        level_objects[obj_idx] = level_objects_host[obj_idx];
+    }
+    
     dim3 threadsPerBlock(16, 16);
     dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x, (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
     renderKernel<<<numBlocks, threadsPerBlock>>>(

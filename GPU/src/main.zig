@@ -1,5 +1,6 @@
 const std = @import("std");
 const time = std.time.milliTimestamp;
+const nanotime = std.time.nanoTimestamp;
 const display = @import("display.zig");
 const c = @cImport({
     @cInclude("X11/Xlib.h");
@@ -9,6 +10,18 @@ const c = @cImport({
 const Sphere = extern struct {
     center: [3]f32,
     radius: f32,
+};
+
+const PhysicsProperties = extern struct {
+    velocity: @Vector(3, f32), // vector if the CPU works with it, [3]f32 if its sent to GPU.
+    mass: f32,
+    acceleration: @Vector(3, f32), // in this case the physics is done CPU sided
+    position: @Vector(3, f32),
+};
+
+const PhysicsObjects = extern struct {
+    geometries: [256]Sphere, // only spheres for now. this is what gets sent to the renderer
+    physical_properties: [256]PhysicsProperties,
 };
 
 const Ray = struct {
@@ -47,25 +60,10 @@ extern "c" fn initScene(
     origin2: f32, // not sure if this should be a slice...
     samples: u16,
     level_geometry_host: *Sphere, // pass in level_geometry_host[0]. in cuda the signature is Sphere* indicating array
-    obj_count: u16,
+    level_objects_host: *Sphere,
+    static_obj_count: u16,
+    dynamic_obj_count: u16,
 ) u16; // returns failure code or w/e
-extern "c" fn render(
-    width: u16,
-    height: u16,
-    pixel_delta_u0: f32, // degenerate way to do it but.. whatever
-    pixel_delta_u1: f32,
-    pixel_delta_u2: f32,
-    pixel_delta_v0: f32,
-    pixel_delta_v1: f32,
-    pixel_delta_v2: f32,
-    pixel00_loc0: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
-    pixel00_loc1: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
-    pixel00_loc2: f32, // not sure if this should be a slice.. do i need to move this to device, or change signature?
-    origin0: f32, // not sure if this should be a slice...
-    origin1: f32, // not sure if this should be a slice...
-    origin2: f32, // not sure if this should be a slice...
-    samples: u16,
-) void;
 extern "c" fn render_scene(
     width: u16,
     height: u16,
@@ -82,6 +80,8 @@ extern "c" fn render_scene(
     origin1: f32, // not sure if this should be a slice...
     origin2: f32, // not sure if this should be a slice...
     samples: u16,
+    level_objects_host: *Sphere,
+    dynamic_obj_count: u16,
 ) void;
 
 //extern "c" fn renderKernel(imageR, imageG, imageB, width, height, samples_per_pixel, depth, hittables_flattened, num_hittables)
@@ -131,7 +131,7 @@ pub fn main() !void {
     const image_width = N;
     const aspect_ratio: f32 = @as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height));
 
-    const obj_count = 4;
+    const static_obj_count = 4;
     var level_geometry_host: [256]Sphere = undefined;
     level_geometry_host[0] = Sphere{
         .center = .{ 0.0, 0.0, 0.5 },
@@ -145,10 +145,45 @@ pub fn main() !void {
         .center = .{ 2.0, 0.0, 0.0 },
         .radius = 0.5,
     };
-    level_geometry_host[1] = Sphere{
+    level_geometry_host[3] = Sphere{
         .center = .{ 0.0, -100.5, -1.0 },
         .radius = 100.0,
     };
+
+    // const PhysicsProperties = extern struct {
+    //     velocity: [3]f32,
+    //     mass: [3]f32,
+    //     acceleration: [3]f32,
+    // };
+    //
+    // const PhysicsObjects = extern struct {
+    //     geometries: [256]Sphere, // only spheres for now. this is what gets sent to the renderer
+    //     physical_properties: [256]PhysicsProperties,
+    // }
+
+    const physics_obj_count = 100;
+    var physics_objects: PhysicsObjects = undefined;
+    for (0..physics_obj_count) |obj_idx| {
+        const offset = @as(f32, @floatFromInt(obj_idx));
+        const radius = 1.0 + offset;
+        const row = @mod(offset, 10.0);
+        const col = offset / @as(f32, @floatFromInt(physics_obj_count));
+        physics_objects.geometries[obj_idx] = Sphere{
+            .center = .{
+                0.0 + col * radius * offset / 2,
+                40.0,
+                0.0 + row * radius * offset / 2,
+            },
+            .radius = radius,
+        };
+
+        physics_objects.physical_properties[obj_idx] = PhysicsProperties{
+            .velocity = splat(0.0),
+            .mass = 1.0,
+            .acceleration = vec3(0, @min(-1, -9.8 + offset), 0),
+            .position = physics_objects.geometries[obj_idx].center,
+        };
+    }
 
     // init scene
     const start = time();
@@ -158,7 +193,7 @@ pub fn main() !void {
     const viewport_height = 2.0;
     const viewport_width = viewport_height * aspect_ratio; // just doing it this way for now
     const mouse_sensitivity: f32 = 20;
-    var origin: @Vector(3, f32) = .{ 2.0, 2.0, 2.0 };
+    var origin: @Vector(3, f32) = .{ 80.0, 80.0, 80.0 };
     // var look_at: @Vector(3, f32) = vec3(0.0, 0.0, 0.0); // look at the origin for now
     var theta_horizontal: f32 = 0.0;
     var theta_vertical: f32 = 0.0;
@@ -204,7 +239,9 @@ pub fn main() !void {
         origin[2],
         samples,
         &level_geometry_host[0],
-        obj_count,
+        &physics_objects.geometries[0],
+        static_obj_count,
+        physics_obj_count,
     );
 
     // i had an llm generate this block
@@ -233,6 +270,13 @@ pub fn main() !void {
     // _ = c.XSelectInput(xdisplay, root_window, c.KeyPressMask | c.KeyReleaseMask);
     const return_events: c_int = 0;
     _ = c.XGrabKeyboard(xdisplay, root_window, return_events, c.GrabModeAsync, c.GrabModeAsync, c.CurrentTime);
+    // https://stackoverflow.com/questions/2792954/x11-how-do-i-really-grab-the-mouse-pointer
+    _ = c.XGrabPointer(xdisplay, root_window, return_events, c.ButtonPressMask |
+        c.ButtonReleaseMask |
+        c.PointerMotionMask |
+        c.FocusChangeMask |
+        c.EnterWindowMask |
+        c.LeaveWindowMask, c.GrabModeAsync, c.GrabModeAsync, root_window, c.None, c.CurrentTime);
     if (c.XQueryPointer(xdisplay, root_window, &root, &child, &root_x, &root_y, &win_x, &win_y, &mask) == 0) {
         std.debug.print("Failed to query pointer\n", .{});
         return;
@@ -249,13 +293,17 @@ pub fn main() !void {
     var dx: f32 = 0;
     var dy: f32 = 0;
     var dz: f32 = 0;
+    var last_time: i64 = time();
+    var current_time: i64 = undefined;
+    var dt: f32 = undefined;
     for (0..60000) |_| {
         if (quit) {
             break;
         }
         // time
-        //const t = @max(2 * (1 + @as(f32, @floatFromInt(d))) / 1200.0, -10.1);
-        //const j = 1 - t;
+        current_time = time();
+        dt = @as(f32, @floatFromInt(current_time - last_time)) / 1000.0; // time is in ms, dt is in seconds
+        last_time = current_time;
 
         //mouse
         last_mouse_x = root_x;
@@ -310,12 +358,29 @@ pub fn main() !void {
                     0x09 => quit = true,
                     else => dx = 0,
                 }
+            } else if (event.type == c.ButtonPress) {
+                std.debug.print("Pew!", .{});
             }
         }
 
-        // camera
+        // update game
+        const speed = 5.0;
+        // update physics
+        for (0..physics_obj_count) |obj_idx| {
+            physics_objects.physical_properties[obj_idx].velocity += physics_objects.physical_properties[obj_idx].acceleration * splat(dt);
+            physics_objects.physical_properties[obj_idx].position += physics_objects.physical_properties[obj_idx].velocity * splat(dt);
+        }
+
+        // update geometries based on physics properties
+        // assume all spheres for now.
+        for (0..physics_obj_count) |obj_idx| {
+            // if obj.type == sphere
+            physics_objects.geometries[obj_idx].center = physics_objects.physical_properties[obj_idx].position;
+        }
+
+        // render
         theta_horizontal += mouse_sensitivity * mouse_dx;
-        theta_vertical += mouse_sensitivity * mouse_dy;
+        theta_vertical -= mouse_sensitivity * mouse_dy;
         forward = unit_vector(vec3(
             @sin(theta_horizontal), //left/right
             @sin(theta_vertical), //up/dowj
@@ -327,10 +392,10 @@ pub fn main() !void {
         viewport_v = splat(viewport_height) * up; //may not be negative // vec3(0, -viewport_height, 0);
         pixel_delta_u = viewport_u / splat(@as(f32, @floatFromInt(image_width)));
         pixel_delta_v = viewport_v / splat(@as(f32, @floatFromInt(image_height)));
-        origin += splat(dx) * right + splat(dy) * up + splat(dz) * forward; // player position
-
+        origin += splat(dx * speed) * right + splat(dy * speed) * up + splat(dz * speed) * forward; // player position
         viewport_upper_left = origin + splat(focal_length) * forward - splat(0.5) * viewport_u - splat(0.5) * viewport_v;
         pixel00_loc = viewport_upper_left + splat(0.5) * (pixel_delta_u + pixel_delta_v);
+
         render_scene(
             image_width,
             image_height,
@@ -347,6 +412,8 @@ pub fn main() !void {
             origin[1],
             origin[2],
             samples,
+            &physics_objects.geometries[0], // pass all dynamic objects to device every frame. allows them to be updated
+            physics_obj_count,
         );
     }
     const duration = time() - start2; // ms
