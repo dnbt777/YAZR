@@ -16,16 +16,12 @@ pub fn main() !void {
     const aspect_ratio: f32 = @as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height));
 
     // initialize materials
-    const material_count = 2;
+    const material_count = 4;
     var materials_host: [256]phys.Material = undefined;
-    materials_host[0] = phys.Material{
-        .material_type = 0, // norm shading
-        .albedo = .{ 0.5, 0.5, 0.5 },
-    }; // do make_norm_material() or something idk
-    materials_host[1] = phys.Material{
-        .material_type = 1,
-        .albedo = .{ 0.5, 0.5, 0.5 },
-    }; // do make_albedo_material(0.5 0.5 0.5) or something
+    materials_host[0] = phys.norm_shaded;
+    materials_host[1] = phys.red_albedo;
+    materials_host[2] = phys.green_albedo;
+    materials_host[3] = phys.blue_albedo;
 
     // static objects
     const static_obj_count = 4;
@@ -38,12 +34,12 @@ pub fn main() !void {
     level_geometry_host[1] = phys.Sphere{
         .center = .{ 0.0, 0.0, 2.0 },
         .radius = 0.5,
-        .material_id = 1,
+        .material_id = 2,
     };
     level_geometry_host[2] = phys.Sphere{
         .center = .{ 2.0, 0.0, 0.0 },
         .radius = 0.5,
-        .material_id = 1,
+        .material_id = 3,
     };
     level_geometry_host[3] = phys.Sphere{
         .center = .{ 0.0, -100.5, -1.0 },
@@ -65,13 +61,13 @@ pub fn main() !void {
                 0.0 + row * radius * offset / 2,
             },
             .radius = radius,
-            .material_id = 1,
+            .material_id = 0,
         };
 
         physics_objects.physical_properties[obj_idx] = phys.PhysicsProperties{
             .velocity = utils.splat(0.0),
-            .mass = 1.0,
-            .acceleration = utils.vec3(0, @min(-1, -9.8 * radius), 0),
+            .mass = radius * radius * radius, // roughly proportional
+            .acceleration = utils.vec3(0, 0.0 * @min(-1, -9.8 * radius), 0),
             .position = physics_objects.geometries[obj_idx].center,
         };
     }
@@ -180,7 +176,7 @@ pub fn main() !void {
     var last_time: i64 = time();
     var current_time: i64 = undefined;
     var dt: f32 = undefined;
-    for (0..60000) |_| {
+    for (0..60000) |frame| {
         if (quit) {
             break;
         }
@@ -205,9 +201,9 @@ pub fn main() !void {
         while (c.XPending(xdisplay) != 0) {
             _ = c.XNextEvent(xdisplay, &event);
 
-            std.debug.print("{}\n", .{event.type});
+            // std.debug.print("{}\n", .{event.type});
             if (event.type == c.KeyPress) {
-                std.debug.print("KeyPress: {}\n", .{event.xkey.keycode});
+                //std.debug.print("KeyPress: {}\n", .{event.xkey.keycode});
                 if (event.xkey.keycode == 0x09) { // escape key
                     quit = true;
                     break;
@@ -223,7 +219,7 @@ pub fn main() !void {
                     else => dx = 0,
                 }
             } else if (event.type == c.KeyRelease) {
-                std.debug.print("KeyRelease: {}\n", .{event.xkey.keycode});
+                // std.debug.print("KeyRelease: {}\n", .{event.xkey.keycode});
                 if (event.xkey.keycode == 0x09) { // escape key
                     quit = true;
                     break;
@@ -244,12 +240,12 @@ pub fn main() !void {
 
                 physics_objects.geometries[physics_obj_count - 1] = phys.Sphere{
                     .center = origin, // start it at the camera's origin
-                    .radius = 0.05,
-                    .material_id = 1,
+                    .radius = 0.5,
+                    .material_id = @mod(@as(u16, @intCast(frame)), material_count),
                 };
 
                 physics_objects.physical_properties[physics_obj_count - 1] = phys.PhysicsProperties{
-                    .velocity = forward * utils.splat(20.0), // shoot the ball forward
+                    .velocity = forward * utils.splat(50.0), // shoot the ball forward
                     .mass = 1.0,
                     .acceleration = utils.vec3(0, -9.8, 0),
                     .position = physics_objects.geometries[physics_obj_count - 1].center,
@@ -259,7 +255,40 @@ pub fn main() !void {
 
         // update game
         const speed = 5.0;
-        // update physics
+        // check for collisions and update
+        // yes. i know this i o(n^2). i dont care, this is v1
+        for (0..physics_obj_count) |obj_idx_1| {
+            for (0..obj_idx_1) |obj_idx_2| {
+                if (obj_idx_2 == obj_idx_1) {
+                    continue;
+                }
+                // check for collision
+                const center_distance = (physics_objects.geometries[obj_idx_1].radius + physics_objects.geometries[obj_idx_2].radius);
+                if (utils.vec3_distance(physics_objects.physical_properties[obj_idx_1].position, physics_objects.physical_properties[obj_idx_2].position) <= center_distance * center_distance) {
+                    const direction = utils.unit_vector(utils.vec3(
+                        physics_objects.physical_properties[obj_idx_2].position[0],
+                        physics_objects.physical_properties[obj_idx_2].position[1],
+                        physics_objects.physical_properties[obj_idx_2].position[2],
+                    ) - utils.vec3(
+                        physics_objects.physical_properties[obj_idx_1].position[0],
+                        physics_objects.physical_properties[obj_idx_1].position[1],
+                        physics_objects.physical_properties[obj_idx_1].position[2],
+                    ));
+                    const vel1 = physics_objects.physical_properties[obj_idx_1].velocity;
+                    const vel2 = physics_objects.physical_properties[obj_idx_2].velocity;
+                    const mass1 = physics_objects.physical_properties[obj_idx_1].mass;
+                    const mass2 = physics_objects.physical_properties[obj_idx_2].mass;
+                    const velocity_change_1 = utils.splat(utils.dot(vel2, direction) * mass2 / mass1) * vel2;
+                    const velocity_change_2 = utils.splat(utils.dot(vel1, direction) * mass1 / mass2) * vel1;
+                    std.debug.print("v1 {}\n", .{velocity_change_1});
+                    std.debug.print("v2 {}\n", .{velocity_change_2});
+                    physics_objects.physical_properties[obj_idx_1].velocity += velocity_change_1;
+                    physics_objects.physical_properties[obj_idx_2].velocity += velocity_change_2;
+                }
+            }
+        }
+
+        // standad update of physics (gravity, maybe buoyancy in the future
         for (0..physics_obj_count) |obj_idx| {
             physics_objects.physical_properties[obj_idx].velocity += physics_objects.physical_properties[obj_idx].acceleration * utils.splat(dt);
             physics_objects.physical_properties[obj_idx].position += physics_objects.physical_properties[obj_idx].velocity * utils.splat(dt);

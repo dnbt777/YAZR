@@ -1,22 +1,50 @@
 const std = @import("std");
 const print = std.debug.print;
 
+pub fn vec3_distance(a: [3]f32, b: [3]f32) f32 {
+    const t0 = a[0] - b[0];
+    const t1 = a[1] - b[1];
+    const t2 = a[2] - b[2];
+    return t0 * t0 + t1 * t1 + t2 * t2;
+}
+
+// utils.zig
+pub fn splat(x: f32) @Vector(3, f32) {
+    return @as(@Vector(3, f32), .{ x, x, x });
+}
+
+pub fn vec3(x: f32, y: f32, z: f32) @Vector(3, f32) {
+    return @as(@Vector(3, f32), .{ x, y, z });
+}
+
+pub fn unit_vector(v: @Vector(3, f32)) @Vector(3, f32) {
+    return v / splat(@sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
+}
+
+// pub fn ray_position(r: Ray, t: f32) @Vector(3, f32) {
+//     return r.origin + splat(t) * r.direction;
+// }
+
+pub fn cross(a: @Vector(3, f32), b: @Vector(3, f32)) @Vector(3, f32) {
+    return vec3(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
+}
+
 pub fn dot(a: @Vector(3, f32), b: @Vector(3, f32)) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-pub fn cross(a: @Vector(3, f32), b: @Vector(3, f32)) @Vector(3, f32) {
-    return @as(@Vector(3, f32), .{
-        a[1] * b[2] - a[2] * b[1],
-        -(a[0] * b[2] - a[2] * b[0]),
-        a[0] * b[1] - a[1] * b[0],
-    });
-}
-
-pub fn splat(x: f32) @Vector(3, f32) {
-    return @as(@Vector(3, f32), @splat(x));
-}
-
+// pub fn cross(a: @Vector(3, f32), b: @Vector(3, f32)) @Vector(3, f32) {
+//     return @as(@Vector(3, f32), .{
+//         a[1] * b[2] - a[2] * b[1],
+//         -(a[0] * b[2] - a[2] * b[0]),
+//         a[0] * b[1] - a[1] * b[0],
+//     });
+// }
+//
+// pub fn splat(x: f32) @Vector(3, f32) {
+//     return @as(@Vector(3, f32), @splat(x));
+// }
+//
 pub fn linear_to_gamma(linear_component: f32) f32 {
     if (linear_component > 0) {
         return std.math.sqrt(linear_component);
@@ -35,9 +63,9 @@ pub fn refract(uv: @Vector(3, f32), n: @Vector(3, f32), etai_over_etat: f32) @Ve
     return r_out_perp + r_out_parallel;
 }
 
-pub fn vec3(x: f32, y: f32, z: f32) @Vector(3, f32) {
-    return @as(@Vector(3, f32), .{ x, y, z });
-}
+// pub fn vec3(x: f32, y: f32, z: f32) @Vector(3, f32) {
+//     return @as(@Vector(3, f32), .{ x, y, z });
+// }
 
 pub fn near_zero(vec: @Vector(3, f32)) bool {
     const s = 1e-8;
@@ -93,13 +121,13 @@ pub fn random_on_hemisphere(normal: @Vector(3, f32)) @Vector(3, f32) {
     }
 }
 
-pub fn unit_vector(vec: @Vector(3, f32)) @Vector(3, f32) {
-    const x2: f32 = std.math.pow(f32, vec[0], 2);
-    const y2: f32 = std.math.pow(f32, vec[1], 2);
-    const z2: f32 = std.math.pow(f32, vec[2], 2);
-    return vec / splat(std.math.sqrt(x2 + y2 + z2));
-}
-
+// pub fn unit_vector(vec: @Vector(3, f32)) @Vector(3, f32) {
+//     const x2: f32 = std.math.pow(f32, vec[0], 2);
+//     const y2: f32 = std.math.pow(f32, vec[1], 2);
+//     const z2: f32 = std.math.pow(f32, vec[2], 2);
+//     return vec / splat(std.math.sqrt(x2 + y2 + z2));
+// }
+//
 pub fn degrees_to_radians(degrees: f32) f32 {
     return degrees * std.math.pi / 180.0;
 }

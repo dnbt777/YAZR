@@ -22,6 +22,25 @@ pub const PhysicsObjects = extern struct {
     physical_properties: [256]PhysicsProperties,
 };
 
+pub fn albedo_material(r: f32, g: f32, b: f32) Material {
+    return Material{
+        .material_type = 1,
+        .albedo = .{ r, g, b },
+    };
+}
+
+fn norm_shaded_material() Material {
+    var nsm: Material = undefined;
+    nsm.material_type = 0;
+    return nsm;
+}
+
+pub const norm_shaded = norm_shaded_material();
+
+pub const red_albedo = albedo_material(1.0, 0.0, 0.0);
+pub const green_albedo = albedo_material(0.0, 1.0, 0.0);
+pub const blue_albedo = albedo_material(0.0, 0.0, 1.0);
+
 // idea
 // no triangles
 // fucking 0 triangles
