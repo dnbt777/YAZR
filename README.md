@@ -1,14 +1,11 @@
 # Yet Another Zig Raytracer
 
 ## PROGRESS
+### GPU/CUDA zig raytracer: Real time game engine with collision
+https://x.com/dnbt777/status/1833486869021282538
+
 ### CPU zig raytracer: DONE
 ![image](https://github.com/user-attachments/assets/633597ac-bac3-4161-a8cc-5c87b53b9b08)
-
-### GPU/CUDA zig raytracer: CH 5 DONE (SHADING W NORMALS IMPLEMENTED)
-![image](https://github.com/user-attachments/assets/7d035b16-91de-4631-b814-a8b974d72262)
-![image](https://github.com/user-attachments/assets/7d749025-92cd-441f-ad42-1decd7609503)
-
-Next up: I need to add hittables, textures, ray sampling, and rays bouncing. Eventually it needs optimization. 0.3s per frame is TRASH
 
 ## Helpful Resources
 ### Raytracer tutorial
