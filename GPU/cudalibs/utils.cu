@@ -12,6 +12,17 @@
 #include <time.h>
 #include <math.h>
 
+#define LOG(msg) do { fprintf(stderr, "%s\n", msg); fflush(stderr); } while(0)
+
+#define CUDA_CHECK(x) do {                                      \
+    cudaError_t err__ = (x);                                    \
+    if (err__ != cudaSuccess) {                                 \
+        printf("CUDA error %s:%d: %s\n",                        \
+               __FILE__, __LINE__, cudaGetErrorString(err__));  \
+        abort();                                                \
+    }                                                          \
+} while(0)
+
 
 // image
 __managed__ int WIDTH;
@@ -70,7 +81,8 @@ extern "C" int cuda_device_check() {
 struct Sphere {
     float center[3];
     float radius;
-    int material_id; // the ID of the material.
+    uint16_t material_id; // the ID of the material.
+    uint16_t _pad;
 };
 
 
@@ -84,7 +96,8 @@ struct Sphere {
 // 4 illumination
 // 5 texture
 struct Material {
-    unsigned int material_type; // double check this is a u8
+    uint16_t material_type; // double check this is a u8
+    uint16_t _pad;
     float albedo[3]; //r, g, b   (add alpha as transparency)
     // will eventually contain all possible properties
     // not all properties will be used, this depends on material_type.
@@ -169,7 +182,7 @@ __global__ void renderKernel(
     float unit_ray_direction[3];
     float magnitude;
 
-    unsigned int idxr, idxg, idxb;
+    unsigned int idxr, idxg, idxb, idxa;
     
     struct Sphere sphere; // should be a pointer probably (OPTIMIZATION)
 
@@ -189,9 +202,13 @@ __global__ void renderKernel(
     if (row < HEIGHT && col < WIDTH) {
         for (int i=0;i<samples;i++) {
             // create ray
-            idxr = (col*WIDTH + row) * 4 + 0; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
-            idxg = (col*WIDTH + row) * 4 + 1;
-            idxb =  (col*WIDTH + row) * 4 + 2;
+            // const int idx = (row * WIDTH + col)*4; // swapped column and row
+            const int idx = (col * WIDTH + row)*4;
+            idxr = idx + 0; // RGB - `texture` is [R, G, B, R, G, B, R, G, ...]
+            idxg = idx + 1;
+            idxb = idx + 2;
+            idxa = idx + 3;
+
             // // // // // // // ray color func here // // // // // // //
             // pixel's center in the viewport
             // uh, I think...
@@ -321,6 +338,7 @@ __global__ void renderKernel(
             screen_tex[idxr] = (unsigned char)(color[0]*255.0); // find some way to uh.. make this an unsigned char
             screen_tex[idxg] = (unsigned char)(color[1]*255.0);
             screen_tex[idxb] = (unsigned char)(color[2]*255.0);
+            screen_tex[idxa] = 255;
             // printf("(%d, %d, %d)\n", screen_tex[idx], screen_tex[idx+1], screen_tex[idx+2]);
         }
     }
@@ -359,64 +377,63 @@ void updateTexture() {
     size_t num_bytes = WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char);
     // printf("updateTexture(): unsigned char size: %d\n", 8*sizeof(unsigned char));
 
-    cudaGraphicsMapResources(1, &cudaResource, 0);
+    CUDA_CHECK(cudaGraphicsMapResources(1, &cudaResource, 0));
     // glCheckError();
     // printf("updateTexture(): resources mapped\n");
     // glCheckError();
     cudaArray_t cuda_Array; // inefficient. creates new array and then sends to device... every frame...
-    cudaGraphicsSubResourceGetMappedArray(&cuda_Array, cudaResource, 0, 0);
-    cudaMemcpyToArray(cuda_Array, 0, 0, d_image,num_bytes,cudaMemcpyDeviceToDevice);
+    CUDA_CHECK(cudaGraphicsSubResourceGetMappedArray(&cuda_Array, cudaResource, 0, 0));
+    CUDA_CHECK(cudaMemcpyToArray(cuda_Array, 0, 0, d_image,num_bytes,cudaMemcpyDeviceToDevice));
     // printf("updateTexture(): got mapped pointer\n");
 
-    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+    CUDA_CHECK(cudaGraphicsUnmapResources(1, &cudaResource, 0));
     // printf("updateTexture(): resources unmapped\n");
     glutPostRedisplay();
 }
 
 // initialize the *tex, the window, etc given parameters.
 // 
-extern "C" int initScene(
-    int width, int height,
+extern "C" void initScene(
+    uint16_t width, uint16_t height,
     const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
     const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
     const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
     const float origin0, const float origin1, const float origin2,
-    int samples,
+    uint16_t samples,
     struct Sphere* level_geometry_host,
     struct Sphere* level_objects_host,
-    int static_obj_count, int dynamic_obj_count,
+    uint16_t static_obj_count, uint16_t dynamic_obj_count,
     struct Material* materials_host,
-    int material_count) {
+    uint16_t material_count) {
 
-    CHANNELS = 3;
-    WIDTH = width;
-    HEIGHT = height;
-    target = GL_TEXTURE_2D;
+    LOG("initScene: entered");
 
-    // set up FPS stuff
-    frame_count = 0;
-    time(&last_time);
-
-    glCheckError();
 
     // Create a windowed mode window and its OpenGL context
-    int argc = 0; // workaround for not passing argc and argv in via main()
-    glutInit(&argc, NULL);
-    glCheckError();
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB); // does this support GLUT_RGB32F?
-    glCheckError();
+    static int argc = 1; // workaround for not passing argc and argv in via main()
+    static char arg0[] = "GPU";
+    static char* argv[] = { arg0, nullptr };
+    LOG("initScene: before glutInit");
+    glutInit(&argc, argv);
+    LOG("initScene: after glutInit");
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA); // does this support GLUT_RGB32F?
     glutInitWindowSize(width, height);
-    glCheckError();
+    LOG("initScene: before glutCreateWindow");
     glutCreateWindow("CUDA OpenGL Interop");
-    glCheckError();
+    LOG("initScene: after glutCreateWindow");
     printf("main(): Window created\n");
 
     // initialize glew
     glewInit();
+    CUDA_CHECK(cudaSetDevice(0));
     printf("main(): glew initialized\n");
+    printf("GL_VENDOR   = %s\n", glGetString(GL_VENDOR));
+    printf("GL_RENDERER = %s\n", glGetString(GL_RENDERER));
+    printf("GL_VERSION  = %s\n", glGetString(GL_VERSION));
     glCheckError();
 
     //initOpenGL
+    target = GL_TEXTURE_2D;
     glEnable(target);
     glCheckError();
     glGenTextures(1, &textureID);
@@ -424,7 +441,14 @@ extern "C" int initScene(
     glBindTexture(target, textureID);
     glCheckError();
     
-    glTexImage2D(target, 0, GL_RGB, WIDTH, HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL); //...
+    CHANNELS = 4;
+    WIDTH = (int)width;
+    HEIGHT = (int)height;
+    glTexImage2D(target, 0, GL_RGBA8, WIDTH, HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glCheckError();
     
     glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -435,15 +459,30 @@ extern "C" int initScene(
     glCheckError();
 
 
+    // set up FPS stuff
+    frame_count = 0;
+    time(&last_time);
+    LOG("initScene: logged_time");
+
+    // prevent OOBs
+    LEVEL_GEOMETRY_COUNT = (int)static_obj_count;
+    if (LEVEL_GEOMETRY_COUNT > 256) LEVEL_GEOMETRY_COUNT = 256;
+    LEVEL_OBJECT_COUNT = (int)dynamic_obj_count;
+    if (LEVEL_OBJECT_COUNT > 256) LEVEL_OBJECT_COUNT = 256;
+    MATERIAL_COUNT = (int)material_count;
+    if (MATERIAL_COUNT > 256) MATERIAL_COUNT = 256;
+
     // init level geometry/statics
-    LEVEL_GEOMETRY_COUNT = static_obj_count; // hardcoded for now. idc
     //for (int obj_idx=0;obj_idx<level_geometry_length;obj_idx++) {
     for (int obj_idx=0;obj_idx<LEVEL_GEOMETRY_COUNT;obj_idx++) {
         // EACH OBJ IS A GUARANTEED SPHERE FOR NOW
         level_geometry[obj_idx] = level_geometry_host[obj_idx];
     }
     // init level dynamic objects 
-    LEVEL_OBJECT_COUNT = dynamic_obj_count; // hardcoded for now. idc
+    LEVEL_OBJECT_COUNT = (int)dynamic_obj_count; // hardcoded for now. idc
+    // prevent oob
+    if (LEVEL_OBJECT_COUNT > 256) LEVEL_OBJECT_COUNT = 256;
+
     //for (int obj_idx=0;obj_idx<level_geometry_length;obj_idx++) {
     for (int obj_idx=0;obj_idx<LEVEL_OBJECT_COUNT;obj_idx++) {
         // EACH OBJ IS A GUARANTEED SPHERE FOR NOW
@@ -458,7 +497,7 @@ extern "C" int initScene(
     
     //initCUDA
     // MAKE SURE TO CHANGE IF TYPE OF TEXTURE ARRAY CHANGES - i.e. unsigned char -> float
-    cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char)); 
+    CUDA_CHECK(cudaMalloc((void**)&d_image, WIDTH * HEIGHT * CHANNELS * sizeof(unsigned char))); 
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
     renderKernel<<<gridSize, blockSize>>>(
@@ -478,22 +517,22 @@ extern "C" int initScene(
         origin2,
         samples
     );
-    cudaDeviceSynchronize();
-    cudaGraphicsGLRegisterImage(&cudaResource, textureID, target, cudaGraphicsRegisterFlagsNone);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaGraphicsGLRegisterImage(
+                &cudaResource, textureID, target, cudaGraphicsRegisterFlagsWriteDiscard));
     printf("main(): cuda initialized\n");
 
-    return 0;
 }
 
 extern "C" int render_scene(
-    int width, int height,
+    uint16_t width, uint16_t height,
     const float pixel_delta_u0,const float pixel_delta_u1,const float pixel_delta_u2,
     const float pixel_delta_v0,const float pixel_delta_v1,const float pixel_delta_v2,
     const float pixel00_loc0,const float pixel00_loc1,const float pixel00_loc2,
     const float origin0, const float origin1, const float origin2,
-    int samples,
+    uint16_t samples,
     Sphere* level_objects_host,
-    int dynamic_obj_count) {
+    uint16_t dynamic_obj_count) {
 
     // update level dynamic objects 
     LEVEL_OBJECT_COUNT = dynamic_obj_count;

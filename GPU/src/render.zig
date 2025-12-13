@@ -1,5 +1,7 @@
 const phys = @import("physics.zig");
 
+pub extern "c" fn cuda_device_check() c_int;
+
 // ok so, if we're operating on a matrix, why is M a pointer to a single f32?
 // the reason is bc cuda uses the first pointer to find the start of the matrix
 // then it uses width and height to move over in memory to the other parts
@@ -27,7 +29,7 @@ pub extern "c" fn initScene(
     dynamic_obj_count: u16,
     materials_host: *phys.Material,
     material_count: u16,
-) u16; // returns failure code or w/e
+) void; // returns failure code or w/e
 
 pub extern "c" fn render_scene(
     width: u16,

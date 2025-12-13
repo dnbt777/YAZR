@@ -1,2 +1,4 @@
 *GPU/.zig-cache/*
 *.zig-cache*
+*/zig-out/*
+*.so

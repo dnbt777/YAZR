@@ -7,9 +7,23 @@ const render = @import("render.zig");
 
 const c = @cImport({
     @cInclude("X11/Xlib.h");
+    @cInclude("stdlib.h"); //for setenv
 });
 
+fn enableNvidiaOffloadIfAvailable() void {
+    if (std.posix.getenv("__GLX_VENDOR_LIBRARY_NAME") != null) return;
+
+    if (render.cuda_device_check() != 0) return;
+
+    // prime-run for this session
+    _ = c.setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
+    _ = c.setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
+    _ = c.setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
+}
+
 pub fn main() !void {
+    enableNvidiaOffloadIfAvailable(); // switch from intel/mesa to nvidia if available
+
     const N = 1000; // square for now
     const image_height = N;
     const image_width = N;
@@ -265,25 +279,39 @@ pub fn main() !void {
                 // check for collision
                 const center_distance = (physics_objects.geometries[obj_idx_1].radius + physics_objects.geometries[obj_idx_2].radius);
                 if (utils.vec3_distance(physics_objects.physical_properties[obj_idx_1].position, physics_objects.physical_properties[obj_idx_2].position) <= center_distance * center_distance) {
-                    const direction = utils.unit_vector(utils.vec3(
-                        physics_objects.physical_properties[obj_idx_2].position[0],
-                        physics_objects.physical_properties[obj_idx_2].position[1],
-                        physics_objects.physical_properties[obj_idx_2].position[2],
-                    ) - utils.vec3(
-                        physics_objects.physical_properties[obj_idx_1].position[0],
-                        physics_objects.physical_properties[obj_idx_1].position[1],
-                        physics_objects.physical_properties[obj_idx_1].position[2],
-                    ));
-                    const vel1 = physics_objects.physical_properties[obj_idx_1].velocity;
-                    const vel2 = physics_objects.physical_properties[obj_idx_2].velocity;
-                    const mass1 = physics_objects.physical_properties[obj_idx_1].mass;
-                    const mass2 = physics_objects.physical_properties[obj_idx_2].mass;
-                    const velocity_change_1 = utils.splat(utils.dot(vel2, direction) * mass2 / mass1) * vel2;
-                    const velocity_change_2 = utils.splat(utils.dot(vel1, direction) * mass1 / mass2) * vel1;
-                    std.debug.print("v1 {}\n", .{velocity_change_1});
-                    std.debug.print("v2 {}\n", .{velocity_change_2});
-                    physics_objects.physical_properties[obj_idx_1].velocity += velocity_change_1;
-                    physics_objects.physical_properties[obj_idx_2].velocity += velocity_change_2;
+                    const restitution: f32 = 0.9;
+
+                    const p1 = physics_objects.physical_properties[obj_idx_1].position;
+                    const p2 = physics_objects.physical_properties[obj_idx_2].position;
+                    var v1 = physics_objects.physical_properties[obj_idx_1].velocity;
+                    var v2 = physics_objects.physical_properties[obj_idx_2].velocity;
+
+                    const m1 = physics_objects.physical_properties[obj_idx_1].mass;
+                    const m2 = physics_objects.physical_properties[obj_idx_2].mass;
+                    const inv_m1: f32 = if (m1 > 0) 1.0 / m1 else 0.0;
+                    const inv_m2: f32 = if (m2 > 0) 1.0 / m2 else 0.0;
+
+                    const n_raw = p2 - p1;
+                    const dist2 = utils.dot(n_raw, n_raw);
+                    if (dist2 > 0.0) {
+                        const dist = std.math.sqrt(dist2);
+                        const n = n_raw / utils.splat(dist);
+
+                        const rv = v2 - v1;
+                        const vel_along_normal = utils.dot(rv, n);
+
+                        // only bounce if moving toward each other
+                        if (vel_along_normal < 0.0) {
+                            const j = -(1.0 + restitution) * vel_along_normal / (inv_m1 + inv_m2);
+                            const impulse = utils.splat(j) * n;
+
+                            v1 -= utils.splat(inv_m1) * impulse;
+                            v2 += utils.splat(inv_m2) * impulse;
+
+                            physics_objects.physical_properties[obj_idx_1].velocity = v1;
+                            physics_objects.physical_properties[obj_idx_2].velocity = v2;
+                        }
+                    }
                 }
             }
         }
